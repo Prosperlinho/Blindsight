@@ -29,6 +29,7 @@ The Next.js App Router frontend provides two connected workflows:
 - **Data Provider Vault:** accepts supported text datasets, presents a local encryption visualizer, and tracks whether a dataset is ready for a query.
 - **Research Console:** accepts a natural-language prompt, displays the simulated buyer escrow balance, submits the request, and renders the insight, attestation status, and settlement result.
 - **Autonomous Agent Bidding:** requests a metadata-based provider valuation from `/api/agent-bid`, displays the proposed USDC quote and mock rationale, and requires provider acceptance before the research query can run.
+- **Walletless UX via Account Abstraction:** To provide a seamless Web2-like experience, the product intentionally avoids requiring users to connect a traditional wallet. In the production architecture, the autonomous AI agent manages escrow and coordinates cross-chain payouts in the background using NEAR Chain Signatures and Intents. The current MVP simulates this flow locally; it does not manage escrow or execute blockchain transactions.
 
 The client coordinates the demo lifecycle: provider upload, buyer funding, query execution, and payout feedback. In the current implementation these states are held in browser memory; the deposit and settlement are not wallet-backed transactions.
 
