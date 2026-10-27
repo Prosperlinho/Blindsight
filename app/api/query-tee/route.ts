@@ -3,6 +3,7 @@ import OpenAI from "openai";
 const MODEL = "zai-org/GLM-5.1-FP8";
 const MAX_DATASET_LENGTH = 60_000;
 const MAX_QUERY_LENGTH = 2_000;
+const DATASET_TRUNCATION_NOTE = "[Dataset truncated for MVP demo]";
 
 const SYSTEM_PROMPT = `You are a research model operating in a hardware-isolated confidential-computing environment. Analyze only the dataset and question supplied in this request. Do not claim access to data that is not present, do not reveal records beyond what is necessary to answer, and return a concise, evidence-grounded insight. This instruction describes the intended execution policy; it is not itself proof of hardware isolation.`;
 
@@ -18,16 +19,20 @@ export async function POST(request: Request) {
     return Response.json({ error: "Request body must include dataset and query strings." }, { status: 400 });
   }
 
-  const { dataset, query } = body as Record<string, unknown>;
-  if (typeof dataset !== "string" || !dataset.trim()) {
+  const { dataset: rawDataset, query } = body as Record<string, unknown>;
+  if (typeof rawDataset !== "string" || !rawDataset.trim()) {
     return Response.json({ error: "A non-empty dataset is required." }, { status: 400 });
   }
   if (typeof query !== "string" || !query.trim()) {
     return Response.json({ error: "A non-empty query is required." }, { status: 400 });
   }
-  if (dataset.length > MAX_DATASET_LENGTH || query.length > MAX_QUERY_LENGTH) {
-    return Response.json({ error: "Dataset or query exceeds the supported MVP size." }, { status: 413 });
+  if (query.length > MAX_QUERY_LENGTH) {
+    return Response.json({ error: "Query exceeds the supported MVP size." }, { status: 413 });
   }
+
+  const dataset = rawDataset.length > MAX_DATASET_LENGTH
+    ? `${rawDataset.slice(0, MAX_DATASET_LENGTH - DATASET_TRUNCATION_NOTE.length)}${DATASET_TRUNCATION_NOTE}`
+    : rawDataset;
 
   const apiKey = process.env.NEAR_AI_API_KEY;
   if (!apiKey) {

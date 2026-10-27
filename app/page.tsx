@@ -198,9 +198,6 @@ export default function Home() {
 
     try {
       const dataset = files.map((file) => `### ${file.name}\n${file.content}`).join("\n\n");
-      if (dataset.length > 60_000) {
-        throw new Error("Combined dataset exceeds the 60,000 character API limit.");
-      }
 
       const response = await fetch("/api/query-tee", {
         method: "POST",
