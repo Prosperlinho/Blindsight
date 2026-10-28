@@ -26,7 +26,7 @@ BlindSight is organized around three pillars: the application experience, confid
 
 The Next.js App Router frontend provides two connected workflows:
 
-- **Data Provider Vault:** accepts supported text datasets, presents a local encryption visualizer, and tracks whether a dataset is ready for a query.
+- **Data Provider Vault:** accepts supported text datasets, validates and indexes them through the API on upload, presents a local encryption visualizer, and tracks whether a dataset is ready for a query.
 - **Research Console:** accepts a natural-language prompt, displays the simulated buyer escrow balance, submits the request, and renders the insight, attestation status, and settlement result.
 - **Autonomous Agent Bidding:** requests a metadata-based provider valuation from `/api/agent-bid`, displays the proposed USDC quote and mock rationale, and requires provider acceptance before the research query can run.
 - **Walletless UX via Account Abstraction:** To provide a seamless Web2-like experience, the product intentionally avoids requiring users to connect a traditional wallet. In the production architecture, the autonomous AI agent manages escrow and coordinates cross-chain payouts in the background using NEAR Chain Signatures and Intents. The current MVP simulates this flow locally; it does not manage escrow or execute blockchain transactions.
@@ -35,11 +35,13 @@ The client coordinates the demo lifecycle: provider upload, buyer funding, query
 
 ### Pillar B: NEAR AI Cloud Gateway — Confidential Inference
 
-The server-side `POST /api/query-tee` route uses the OpenAI-compatible NEAR AI Cloud endpoint and the open-weight model `zai-org/GLM-5.1-FP8`. It validates the dataset and query, applies request size limits, and returns the model insight to the frontend. The gateway is configured with the server-side `NEAR_AI_API_KEY` environment variable.
+The server-side `POST /api/query-tee` route prepares and validates dataset structure on upload, builds a column index, then stores the prepared dataset under an opaque ID in a bounded process-local cache. Queries reference that ID so a warm instance can reuse its parsed representation. For cold-instance recovery the page also supplies the dataset, which the route reparses only if the cache entry is unavailable. The route then uses the OpenAI-compatible NEAR AI Cloud endpoint and open-weight model `zai-org/GLM-5.1-FP8`, enforces request limits, and returns the model insight. The gateway is configured with server-side `NEAR_AI_API_KEY`.
 
 The production target is inference inside an attested Trusted Execution Environment (TEE), such as an Intel TDX-backed environment. The provider would encrypt the dataset to the TEE's public key before it leaves the client. The TEE would decrypt and process it within the protected execution boundary, returning only the approved result and verifiable attestation evidence.
 
-The separate `POST /api/agent-bid` route accepts file count, byte size, and estimated row count. The current mock agent calculates a quote at $0.05 per row and returns a short deterministic justification. The provider must accept this quote before the query is enabled; the accepted amount is then passed to the payout helper.
+The separate `POST /api/agent-bid` route validates the uploaded dataset structure and derives its row count server-side; it does not trust a client-provided count. The current mock agent calculates a quote at $0.05 per row and returns a short deterministic justification. The provider must accept this quote before the query is enabled; the accepted amount is then passed to the payout helper.
+
+Both API routes add `attestation_proof: "AMD-SEV-SNP-Verified-v1.2"` to their JSON response and an `X-TEE-Attestation-Proof` header. This metadata is a fixed demo declaration only; it is not cryptographic or hardware-backed attestation.
 
 ### Pillar C: NEAR Chain Signatures / Intents — Provider Settlement
 
@@ -69,6 +71,9 @@ BlindSight is a 14-day sprint MVP. The following declarations are part of the ar
 - **Client-Side Encryption:** The UI simulates AES-256 encryption visually by streaming random alphanumeric characters. This preview is not an encryption transform and does not encrypt the uploaded file. In production, the payload is encrypted client-side using the TEE's public key before transmission. Currently, the MVP routes the dataset to the API to demonstrate the inference loop; the original dataset is sent to the configured model gateway.
 - **Hardware Attestation:** The Intel TDX / NVIDIA hardware attestation token is mocked in the current MVP build to simulate the verification flow. The API returns a fixed mock token, and the UI badge is driven by the presence of that token. It is not hardware evidence or cryptographic verification.
 - **Settlement & Escrow:** The buyer USDC deposit and the Defuse SDK cross-chain automated payouts are mocked to demonstrate the capital-flow architecture without requiring live mainnet liquidity. The balance is local UI state; the payout helper constructs and type-checks a request-shaped object but does not invoke Defuse or move funds. The displayed transaction hash is synthetic.
+- **Dataset Quality & Empty-Store Fallback:** CSV/TSV uploads require a header row and consistently sized data rows; JSON must contain structured rows or objects, and text files must contain non-empty lines. Malformed populated data is rejected with `Dataset rejected: File structure does not meet quality standards.` Missing or structurally empty input uses a small pre-seeded synthetic DeFi liquidity dataset for demo continuity.
+- **Inference Probing Defense:** The query route keeps a bounded, process-local history keyed by requester and dataset fingerprint. More than five highly specific queries overlapping the same terms in a 15-minute window receive a 429 rate-limit response asking the user to generalize. This is a best-effort MVP heuristic, not a distributed or privacy-proof differential-privacy system; serverless instance restarts and independent instances do not share the history.
+- **Prepared Dataset Cache:** Parsed rows and column indexes are cached in process memory with a bounded entry count and TTL. This reduces repeated parsing on a warm instance. It is not durable or shared across serverless instances; the raw payload is retained in the request for cache-miss recovery.
 
 These boundaries are explicit so judges can distinguish the product architecture being demonstrated from production-grade cryptography, attested execution, wallet custody, and live settlement.
 

@@ -1,7 +1,8 @@
 "use client";
 
-import { useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
 import { executeDataPayout } from "@/lib/executeSettlement";
+import { disconnectWallet, getWalletConnectionState, initializeWalletSelector, openWalletModal } from "@/lib/nearWallet";
 
 type VaultFile = {
   name: string;
@@ -15,6 +16,10 @@ type QueryResponse = {
   error?: string;
 };
 
+type DatasetPreparationResponse = {
+  datasetId?: string;
+  error?: string;
+};
 type AgentBid = {
   bidAmountInUSDC: string;
   rowCount: number;
@@ -37,28 +42,11 @@ function formatBytes(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function getFileRowCount(file: VaultFile) {
-  const extension = file.name.split(".").pop()?.toLowerCase();
-  const content = file.content.trim();
-  if (!content) return 0;
-
-  if (extension === "json") {
-    try {
-      const parsed: unknown = JSON.parse(content);
-      if (Array.isArray(parsed)) return parsed.length;
-      return 1;
-    } catch {
-      return content.split(/\r?\n/).filter((line) => line.trim()).length;
-    }
-  }
-
-  const lines = content.split(/\r?\n/).filter((line) => line.trim());
-  return extension === "csv" || extension === "tsv" ? Math.max(0, lines.length - 1) : lines.length;
-}
-
 export default function Home() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<VaultFile[]>([]);
+  const [preparedDatasetId, setPreparedDatasetId] = useState("");
+  const [isPreparingDataset, setIsPreparingDataset] = useState(false);
   const [vaultQueued, setVaultQueued] = useState(false);
   const [isEncrypting, setIsEncrypting] = useState(false);
   const [ciphertext, setCiphertext] = useState("");
@@ -77,6 +65,61 @@ export default function Home() {
   const [buyerBalance, setBuyerBalance] = useState(0);
   const [isDepositing, setIsDepositing] = useState(false);
   const [runCount, setRunCount] = useState(0);
+  const [walletAccountId, setWalletAccountId] = useState<string | null>(null);
+  const [isWalletLoading, setIsWalletLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    let cleanup: (() => void) | undefined;
+
+    async function syncWalletState() {
+      const selector = await initializeWalletSelector();
+      if (!selector || cancelled) return;
+
+      const update = () => {
+        const state = getWalletConnectionState(selector);
+        setWalletAccountId(state.accountId);
+      };
+
+      update();
+
+      const signedInSubscription = selector.on("signedIn", update);
+      const signedOutSubscription = selector.on("signedOut", update);
+      const accountsChangedSubscription = selector.on("accountsChanged", update);
+
+      cleanup = () => {
+        signedInSubscription.unsubscribe();
+        signedOutSubscription.unsubscribe();
+        accountsChangedSubscription.unsubscribe();
+      };
+    }
+
+    void syncWalletState();
+
+    return () => {
+      cancelled = true;
+      cleanup?.();
+    };
+  }, []);
+
+  async function handleWalletConnect() {
+    setIsWalletLoading(true);
+    try {
+      await openWalletModal();
+    } finally {
+      setIsWalletLoading(false);
+    }
+  }
+
+  async function handleWalletDisconnect() {
+    setIsWalletLoading(true);
+    try {
+      await disconnectWallet();
+      setWalletAccountId(null);
+    } finally {
+      setIsWalletLoading(false);
+    }
+  }
 
   async function handleDeposit() {
     if (isDepositing) return;
@@ -86,8 +129,42 @@ export default function Home() {
     setIsDepositing(false);
   }
 
+  async function prepareFilesForVault(datasetFiles: VaultFile[]) {
+    setPreparedDatasetId("");
+    setVaultQueued(false);
+    setCiphertext("");
+    setAgentBid(null);
+    setAcceptedBid(null);
+    setIsPreparingDataset(true);
+
+    if (!datasetFiles.length) {
+      setIsPreparingDataset(false);
+      setErrorMessage("");
+      return;
+    }
+
+    try {
+      const dataset = datasetFiles.map((file) => `### ${file.name}\n${file.content}`).join("\n\n");
+      const response = await fetch("/api/query-tee", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "prepare", dataset }),
+      });
+      const result = (await response.json()) as DatasetPreparationResponse;
+      if (!response.ok || !result.datasetId) {
+        throw new Error(result.error || "Dataset preparation failed.");
+      }
+      setPreparedDatasetId(result.datasetId);
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Dataset preparation failed.");
+    } finally {
+      setIsPreparingDataset(false);
+    }
+  }
+
   async function addFiles(selectedFiles: FileList | File[]) {
-    if (isEncrypting) return;
+    if (isEncrypting || isValuing || isPreparingDataset) return;
     const nextFiles: VaultFile[] = [];
     const rejectedFiles: string[] = [];
 
@@ -100,25 +177,23 @@ export default function Home() {
     }
 
     if (nextFiles.length) {
-      setFiles((current) => [...current, ...nextFiles]);
+      const updatedFiles = [...files, ...nextFiles];
+      setFiles(updatedFiles);
       setInsight("");
       setAttestationToken("");
       setSettlementHash("");
       setSuccessMessage("");
+      await prepareFilesForVault(updatedFiles);
+    } else if (!rejectedFiles.length) {
+      setErrorMessage("");
     }
-    setCiphertext("");
-    setAgentBid(null);
-    setAcceptedBid(null);
-    setErrorMessage(
-      rejectedFiles.length
-        ? `Unsupported or oversized file${rejectedFiles.length === 1 ? "" : "s"}: ${rejectedFiles.join(", ")}. Use CSV, JSON, TXT, or TSV files under 1 MB.`
-        : "",
-    );
-    setVaultQueued(false);
+    if (rejectedFiles.length) {
+      setErrorMessage(`Unsupported or oversized file${rejectedFiles.length === 1 ? "" : "s"}: ${rejectedFiles.join(", ")}. Use CSV, JSON, TXT, or TSV files under 1 MB.`);
+    }
   }
 
   async function handleEncryptPayload() {
-    if (!files.length || isEncrypting) return;
+    if (!files.length || !preparedDatasetId || isPreparingDataset || isEncrypting) return;
     setIsEncrypting(true);
     setVaultQueued(false);
     setCiphertext("");
@@ -140,14 +215,9 @@ export default function Home() {
   }
 
   async function requestAgentValuation() {
-    if (!files.length || !vaultQueued || isValuing) return;
+    if (!files.length || !preparedDatasetId || !vaultQueued || isPreparingDataset || isValuing) return;
 
-    const rowCount = files.reduce((total, file) => total + getFileRowCount(file), 0);
     const fileSizeBytes = files.reduce((total, file) => total + file.size, 0);
-    if (rowCount < 1) {
-      setErrorMessage("The uploaded files do not contain any billable rows for valuation.");
-      return;
-    }
 
     setIsValuing(true);
     setErrorMessage("");
@@ -155,10 +225,15 @@ export default function Home() {
     setAcceptedBid(null);
 
     try {
+      const dataset = files.map((file) => `### ${file.name}\n${file.content}`).join("\n\n");
       const response = await fetch("/api/agent-bid", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rowCount, fileCount: files.length, fileSizeBytes }),
+        body: JSON.stringify({
+          dataset,
+          fileCount: files.length,
+          fileSizeBytes,
+        }),
       });
       const result = (await response.json()) as AgentBidResponse;
       if (!response.ok) throw new Error(result.error || "Agent valuation failed.");
@@ -181,13 +256,13 @@ export default function Home() {
   function handleDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     setIsDragging(false);
-    if (isEncrypting || isValuing) return;
+    if (isEncrypting || isValuing || isPreparingDataset) return;
     void addFiles(event.dataTransfer.files);
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!query.trim() || files.length === 0 || !vaultQueued || !acceptedBid || buyerBalance < 10 || isRunning) return;
+    if (!query.trim() || files.length === 0 || !preparedDatasetId || !vaultQueued || !acceptedBid || buyerBalance < 10 || isRunning) return;
 
     setIsRunning(true);
     setErrorMessage("");
@@ -198,11 +273,11 @@ export default function Home() {
 
     try {
       const dataset = files.map((file) => `### ${file.name}\n${file.content}`).join("\n\n");
-
       const response = await fetch("/api/query-tee", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          datasetId: preparedDatasetId,
           dataset,
           query: query.trim(),
           ciphertextPreview: ciphertext,
@@ -259,13 +334,28 @@ export default function Home() {
               <span>NEAR Testnet</span>
               <span className="text-[#718079]">⌄</span>
             </button>
-            <button
-              className="grid size-9 place-items-center border border-white/10 font-mono text-xs text-[#99a8a1] transition hover:border-white/25 hover:text-white"
-              aria-label="Open account menu"
-              title="Account"
-            >
-              JD
-            </button>
+            {walletAccountId ? (
+              <button
+                type="button"
+                onClick={() => void handleWalletDisconnect()}
+                disabled={isWalletLoading}
+                className="flex items-center gap-2 border border-[#b5ff82]/30 bg-[#b5ff82]/[0.07] px-3 py-2 font-mono text-[10px] uppercase tracking-[0.1em] text-[#d7eed2] transition hover:border-[#b5ff82]/60 hover:bg-[#b5ff82]/[0.12] disabled:cursor-wait disabled:opacity-60"
+                title={`Disconnect ${walletAccountId}`}
+              >
+                <span className="size-1.5 rounded-full bg-[#b5ff82] shadow-[0_0_9px_#b5ff82]" />
+                <span className="max-w-[150px] truncate">{walletAccountId}</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void handleWalletConnect()}
+                disabled={isWalletLoading}
+                className="flex items-center gap-2 border border-white/10 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.1em] text-[#a4b1ab] transition hover:border-[#72d9d0]/45 hover:text-white disabled:cursor-wait disabled:opacity-60"
+              >
+                <span className="size-1.5 rounded-full bg-[#72d9d0] shadow-[0_0_8px_#72d9d0]" />
+                <span>{isWalletLoading ? "Connecting..." : "Connect Wallet"}</span>
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -322,7 +412,7 @@ export default function Home() {
                 multiple
                 accept=".csv,.json,.txt,.tsv,text/csv,application/json,text/plain,text/tab-separated-values"
                 className="sr-only"
-                disabled={isEncrypting || isValuing}
+                disabled={isEncrypting || isValuing || isPreparingDataset}
                 onChange={handleFileChange}
                 aria-label="Select data files"
               />
@@ -334,11 +424,11 @@ export default function Home() {
                 }}
                 onDrop={handleDrop}
                 className={`group flex min-h-[220px] cursor-pointer flex-col items-center justify-center border border-dashed px-5 text-center transition ${isDragging ? "border-[#b5ff82] bg-[#b5ff82]/[0.07]" : "border-[#36433e] bg-[#0a0f10] hover:border-[#778b7e] hover:bg-[#0c1212]"}`}
-                onClick={() => { if (!isEncrypting && !isValuing) fileInputRef.current?.click(); }}
+                onClick={() => { if (!isEncrypting && !isValuing && !isPreparingDataset) fileInputRef.current?.click(); }}
                 role="button"
                 tabIndex={0}
                 onKeyDown={(event) => {
-                  if (!isEncrypting && !isValuing && (event.key === "Enter" || event.key === " ")) {
+                  if (!isEncrypting && !isValuing && !isPreparingDataset && (event.key === "Enter" || event.key === " ")) {
                     event.preventDefault();
                     fileInputRef.current?.click();
                   }
@@ -370,17 +460,15 @@ export default function Home() {
                       <button
                         type="button"
                         onClick={() => {
-                          setVaultQueued(false);
-                          setCiphertext("");
-                          setAgentBid(null);
-                          setAcceptedBid(null);
-                          setFiles((current) => current.filter((_, fileIndex) => fileIndex !== index));
+                          const remainingFiles = files.filter((_, fileIndex) => fileIndex !== index);
+                          setFiles(remainingFiles);
                           setInsight("");
                           setAttestationToken("");
                           setSettlementHash("");
                           setSuccessMessage("");
+                          void prepareFilesForVault(remainingFiles);
                         }}
-                        disabled={isEncrypting || isValuing}
+                        disabled={isEncrypting || isValuing || isPreparingDataset}
                         className="shrink-0 px-2 py-1 font-mono text-[9px] text-[#74817b] hover:text-[#ff9a83]"
                         aria-label={`Remove ${file.name}`}
                       >
@@ -406,13 +494,13 @@ export default function Home() {
               <button
                 type="button"
                 onClick={() => void handleEncryptPayload()}
-                disabled={files.length === 0 || isEncrypting}
+                disabled={files.length === 0 || !preparedDatasetId || isPreparingDataset || isEncrypting}
                 className="mt-5 flex h-10 w-full items-center justify-center gap-2 bg-[#b5ff82] font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-[#111711] transition hover:bg-[#c6ff9d] disabled:cursor-not-allowed disabled:bg-[#344036] disabled:text-[#7b897d]"
               >
-                <span>{isEncrypting ? "Encrypting payload locally..." : "Encrypt Payload Locally"}</span><span aria-hidden="true">{isEncrypting ? "···" : "↗"}</span>
+                <span>{isPreparingDataset ? "Validating dataset..." : isEncrypting ? "Encrypting payload locally..." : "Encrypt Payload Locally"}</span><span aria-hidden="true">{isPreparingDataset || isEncrypting ? "···" : "↗"}</span>
               </button>
               <div className="mt-3 flex justify-center gap-2 font-mono text-[9px] uppercase tracking-[0.1em] text-[#56635d]">
-                <span>{vaultQueued ? "Payload ready in local preview" : "Local encryption required to query"}</span>
+                <span>{isPreparingDataset ? "Checking dataset structure and building index" : vaultQueued ? "Payload ready in local preview" : "Local encryption required to query"}</span>
               </div>
               {(isEncrypting || vaultQueued) && (
                 <div className="mt-4 border border-white/[0.1] bg-black p-3 font-mono text-[9px] leading-5">
@@ -514,7 +602,7 @@ export default function Home() {
                     <span className="font-mono text-[9px] text-[#64716b]">{query.length} / 500 <span className="mx-2 text-[#3b4741]">|</span> Context: provider vault</span>
                     <button
                       type="submit"
-                      disabled={!query.trim() || files.length === 0 || !vaultQueued || !acceptedBid || buyerBalance < 10 || isRunning}
+                      disabled={!query.trim() || files.length === 0 || !preparedDatasetId || !vaultQueued || !acceptedBid || buyerBalance < 10 || isRunning}
                       className="flex h-9 items-center gap-3 bg-[#72d9d0] px-4 font-mono text-[9px] font-semibold uppercase tracking-[0.12em] text-[#071312] transition hover:bg-[#8ce9df] disabled:cursor-wait disabled:opacity-60"
                     >
                       <span>{isRunning ? "Querying dataset" : "Run Confidential Query"}</span>
