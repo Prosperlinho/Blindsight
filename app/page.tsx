@@ -88,9 +88,9 @@ export default function Home() {
       const accountsChangedSubscription = selector.on("accountsChanged", update);
 
       cleanup = () => {
-        signedInSubscription.unsubscribe();
-        signedOutSubscription.unsubscribe();
-        accountsChangedSubscription.unsubscribe();
+        signedInSubscription.remove();
+        signedOutSubscription.remove();
+        accountsChangedSubscription.remove();
       };
     }
 
@@ -335,16 +335,27 @@ export default function Home() {
               <span className="text-[#718079]">⌄</span>
             </button>
             {walletAccountId ? (
-              <button
-                type="button"
-                onClick={() => void handleWalletDisconnect()}
-                disabled={isWalletLoading}
-                className="flex items-center gap-2 border border-[#b5ff82]/30 bg-[#b5ff82]/[0.07] px-3 py-2 font-mono text-[10px] uppercase tracking-[0.1em] text-[#d7eed2] transition hover:border-[#b5ff82]/60 hover:bg-[#b5ff82]/[0.12] disabled:cursor-wait disabled:opacity-60"
-                title={`Disconnect ${walletAccountId}`}
-              >
-                <span className="size-1.5 rounded-full bg-[#b5ff82] shadow-[0_0_9px_#b5ff82]" />
-                <span className="max-w-[150px] truncate">{walletAccountId}</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <div
+                  className="flex items-center gap-2 border border-[#b5ff82]/30 bg-[#b5ff82]/[0.06] px-2.5 py-2 font-mono text-[10px] uppercase tracking-[0.1em] text-[#dfeee4] shadow-[inset_0_0_0_1px_rgba(181,255,130,0.08)]"
+                  title={walletAccountId}
+                >
+                  <span className="inline-flex items-center gap-2">
+                    <span className="size-1.5 rounded-full bg-[#b5ff82] shadow-[0_0_9px_#b5ff82]" />
+                    <span className="text-[#c8f1b6]">Connected as</span>
+                  </span>
+                  <span className="max-w-[150px] truncate text-[#f2f7f1]">{walletAccountId.length > 18 ? `${walletAccountId.slice(0, 8)}...${walletAccountId.slice(-8)}` : walletAccountId}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleWalletDisconnect()}
+                  disabled={isWalletLoading}
+                  className="border border-white/10 px-2 py-2 font-mono text-[9px] uppercase tracking-[0.12em] text-[#a4b1ab] transition hover:border-[#ff9a83]/35 hover:text-[#ffb5a0] disabled:cursor-wait disabled:opacity-60"
+                  aria-label={`Disconnect wallet ${walletAccountId}`}
+                >
+                  Disconnect
+                </button>
+              </div>
             ) : (
               <button
                 type="button"
