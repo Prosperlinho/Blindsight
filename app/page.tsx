@@ -329,6 +329,13 @@ export default function Home() {
               TEE gateway <span className="text-[#b5ff82]">preview</span>
             </div>
             <div className="h-5 w-px bg-white/10" />
+            <div
+              className="hidden items-center gap-2 rounded-full border border-white/10 bg-[#0a1112]/90 px-2.5 py-1.5 font-mono text-[9px] uppercase tracking-[0.12em] text-[#b8c5c1] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.02)] md:flex"
+              title="Background escrow settlement & frictionless session execution powered by NEAR."
+            >
+              <span className="size-1.5 rounded-full bg-[#7ef0a4] shadow-[0_0_8px_rgba(126,240,164,0.8)]" />
+              <span>Chain Abstraction Active</span>
+            </div>
             <button className="flex items-center gap-2 border border-white/10 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.1em] text-[#a4b1ab] transition hover:border-[#b5ff82]/40 hover:text-white">
               <span className="size-1.5 rounded-full bg-[#f0b66a]" />
               <span>NEAR Testnet</span>

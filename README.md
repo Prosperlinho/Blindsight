@@ -1,36 +1,25 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 🔒 Blindsight
 
-## Getting Started
+> **"Autonomous AI agents that spend money to buy confidential insights without compromising human privacy."**
 
-First, run the development server:
+[![Live Demo](https://img.shields.io/badge/Live_Demo-blindsight.vercel.app-000000?style=for-the-badge&logo=vercel)](https://blindsight.vercel.app)
+[![Built for NEAR](https://img.shields.io/badge/NEAR-Protocol-00C08B?style=for-the-badge&logo=near)](https://near.org)
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+---
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## ⚡ 30-Second Executive Summary (For Judges)
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### 🎯 The Problem
+Data owners want to monetize sensitive datasets (financial records, medical stats, user behavior), but selling raw files leads to permanent data leaks and loss of control.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### 💡 The Blindsight Solution
+**Blindsight** is a confidential Web3 data marketplace that enables autonomous AI agents to buy **intelligence**, not raw files. 
 
-## Learn More
+1. **Vaulting:** Data owners upload sensitive files into a client-side encrypted vault.
+2. **Autonomous Bidding:** AI agents analyze data schemas and automatically submit financial bids for access.
+3. **Black-Box Compute:** Buyers pay to query datasets inside a hardware-isolated **Trusted Execution Environment (TEE)** via NEAR AI Cloud.
+4. **Safe Output:** Buyers receive *only* computed answers, the raw file remains 100% private, and payouts settle instantly via smart contracts.
 
-To learn more about Next.js, take a look at the following resources:
+---
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## 🛠️ Architecture & Tech Stack
