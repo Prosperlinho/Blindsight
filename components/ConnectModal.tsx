@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
 type ConnectModalProps = {
   open: boolean;
@@ -8,20 +8,28 @@ type ConnectModalProps = {
   error: string | null;
   onClose: () => void;
   onCreateInstantWallet: () => void;
+  onImportPrivateKey: (secretKey: string) => void;
   onConnectExistingWallet: () => void;
 };
 
-export default function ConnectModal({
-  open,
+export default function ConnectModal(props: ConnectModalProps) {
+  if (!props.open) return null;
+
+  return <ConnectModalDialog {...props} />;
+}
+
+function ConnectModalDialog({
   isLoading,
   error,
   onClose,
   onCreateInstantWallet,
+  onImportPrivateKey,
   onConnectExistingWallet,
 }: ConnectModalProps) {
-  useEffect(() => {
-    if (!open) return;
+  const [isImportFormOpen, setIsImportFormOpen] = useState(false);
+  const [secretKey, setSecretKey] = useState("");
 
+  useEffect(() => {
     const previousOverflow = document.body.style.overflow;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
@@ -34,9 +42,12 @@ export default function ConnectModal({
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [open, onClose]);
+  }, [onClose]);
 
-  if (!open) return null;
+  function handleImport(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    onImportPrivateKey(secretKey);
+  }
 
   return (
     <div
@@ -80,33 +91,42 @@ export default function ConnectModal({
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2">
-          <button
-            type="button"
-            onClick={onCreateInstantWallet}
-            disabled={isLoading}
-            className="group relative flex min-h-[220px] flex-col border border-[#34d399]/40 bg-gradient-to-br from-[#123326]/60 to-[#0d1715] p-5 text-left transition hover:border-[#54edb0]/75 hover:from-[#153c2c]/75 disabled:cursor-wait disabled:opacity-65 sm:p-6"
-          >
-            <span className="mb-5 inline-flex w-fit items-center gap-1.5 border border-[#34d399]/30 bg-[#34d399]/10 px-2 py-1 font-mono text-[9px] uppercase tracking-[0.13em] text-[#74e7b5]">
-              <span aria-hidden="true">✦</span>
-              Recommended
-            </span>
-            <span className="text-[17px] font-medium text-white">Create Instant Wallet</span>
-            <span className="mt-2 text-xs leading-5 text-[#9ba9a1]">
-              Instant Web2 onboarding with a passkey or email.
-            </span>
-            <span className="mt-5 flex flex-col gap-2 text-xs text-[#c5d2ca]">
-              <span className="flex items-center gap-2">
-                <span className="text-[#54d99d]">✓</span> No seed phrases to manage
+          <div className="flex min-h-[220px] flex-col border border-[#34d399]/40 bg-gradient-to-br from-[#123326]/60 to-[#0d1715] p-5 transition hover:border-[#54edb0]/75 sm:p-6">
+            <button
+              type="button"
+              onClick={onCreateInstantWallet}
+              disabled={isLoading}
+              className="group flex flex-1 flex-col text-left disabled:cursor-wait disabled:opacity-65"
+            >
+              <span className="mb-5 inline-flex w-fit items-center gap-1.5 border border-[#34d399]/30 bg-[#34d399]/10 px-2 py-1 font-mono text-[9px] uppercase tracking-[0.13em] text-[#74e7b5]">
+                <span aria-hidden="true">✦</span>
+                Recommended
               </span>
-              <span className="flex items-center gap-2">
-                <span className="text-[#54d99d]">✓</span> Passkey or email onboarding
+              <span className="text-[17px] font-medium text-white">Create Instant Wallet</span>
+              <span className="mt-2 text-xs leading-5 text-[#9ba9a1]">
+                Create a wallet in this browser without an external redirect.
               </span>
-            </span>
-            <span className="mt-auto flex items-center gap-2 pt-5 font-mono text-[10px] uppercase tracking-[0.12em] text-[#74e7b5]">
-              {isLoading ? "Opening Meteor Wallet..." : "Get started"}
-              <span aria-hidden="true" className="transition-transform group-hover:translate-x-1">→</span>
-            </span>
-          </button>
+              <span className="mt-5 flex flex-col gap-2 text-xs text-[#c5d2ca]">
+                <span className="flex items-center gap-2">
+                  <span className="text-[#54d99d]">✓</span> No seed phrase setup
+                </span>
+                <span className="flex items-center gap-2">
+                  <span className="text-[#54d99d]">✓</span> Ready instantly in this browser
+                </span>
+              </span>
+              <span className="mt-auto flex items-center gap-2 pt-5 font-mono text-[10px] uppercase tracking-[0.12em] text-[#74e7b5]">
+                {isLoading ? "Creating wallet..." : "Get started"}
+                <span aria-hidden="true" className="transition-transform group-hover:translate-x-1">→</span>
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsImportFormOpen((isOpen) => !isOpen)}
+              className="mt-4 w-fit text-left text-xs text-[#9ba9a1] underline decoration-white/20 underline-offset-4 transition hover:text-[#74e7b5]"
+            >
+              Already have an embedded key? Import Key
+            </button>
+          </div>
 
           <button
             type="button"
@@ -130,6 +150,38 @@ export default function ConnectModal({
           </button>
         </div>
 
+        {isImportFormOpen && (
+          <form onSubmit={handleImport} className="mt-4 border border-white/10 bg-white/[0.025] p-4">
+            <label htmlFor="embedded-private-key" className="block text-xs font-medium text-[#d5dfd9]">
+              Import your embedded wallet key
+            </label>
+            <input
+              id="embedded-private-key"
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              value={secretKey}
+              onChange={(event) => setSecretKey(event.target.value)}
+              placeholder="ed25519:..."
+              disabled={isLoading}
+              required
+              className="mt-2 w-full border border-white/10 bg-[#080c0d] px-3 py-2.5 font-mono text-xs text-white outline-none placeholder:text-[#56635d] focus:border-[#34d399]/50 disabled:opacity-60"
+            />
+            <div className="mt-3 flex items-center justify-between gap-3">
+              <p className="text-[10px] leading-4 text-[#748079]">
+                The key is imported into this browser&apos;s local storage.
+              </p>
+              <button
+                type="submit"
+                disabled={isLoading || !secretKey.trim()}
+                className="shrink-0 border border-[#34d399]/35 bg-[#34d399]/10 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.1em] text-[#74e7b5] transition hover:border-[#54edb0]/70 disabled:cursor-wait disabled:opacity-50"
+              >
+                {isLoading ? "Importing..." : "Import wallet"}
+              </button>
+            </div>
+          </form>
+        )}
+
         {error && (
           <p role="alert" className="mt-4 border border-[#ff9a83]/25 bg-[#ff9a83]/[0.06] px-3 py-2 text-xs leading-5 text-[#ffb5a0]">
             {error}
@@ -137,7 +189,7 @@ export default function ConnectModal({
         )}
 
         <p className="mt-5 text-center font-mono text-[9px] uppercase tracking-[0.1em] text-[#64716b]">
-          Wallet access stays in your control
+          Embedded wallet keys are stored in this browser&apos;s local storage
         </p>
       </section>
     </div>

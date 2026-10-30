@@ -3,7 +3,14 @@
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
 import ConnectModal from "@/components/ConnectModal";
 import { executeDataPayout } from "@/lib/executeSettlement";
-import { createInstantWallet, disconnectWallet, getWalletConnectionState, initializeWalletSelector, openWalletModal } from "@/lib/nearWallet";
+import {
+  createInstantWallet as generateEmbeddedWallet,
+  disconnectEmbeddedWallet,
+  exportPrivateKey as getEmbeddedPrivateKey,
+  getStoredEmbeddedWallet,
+  importPrivateKey as importEmbeddedPrivateKey,
+} from "@/lib/embeddedWallet";
+import { disconnectWallet, getWalletConnectionState, initializeWalletSelector, openWalletModal } from "@/lib/nearWallet";
 
 type VaultFile = {
   name: string;
@@ -22,6 +29,10 @@ type QueryResponse = {
 
 type DatasetPreparationResponse = {
   datasetId?: string;
+  error?: string;
+};
+type VaultParseResponse = {
+  text?: string;
   error?: string;
 };
 type AgentBid = {
@@ -70,9 +81,13 @@ export default function Home() {
   const [isDepositing, setIsDepositing] = useState(false);
   const [runCount, setRunCount] = useState(0);
   const [walletAccountId, setWalletAccountId] = useState<string | null>(null);
+  const [walletSource, setWalletSource] = useState<"embedded" | "selector" | null>(null);
   const [isWalletLoading, setIsWalletLoading] = useState(false);
   const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
   const [walletError, setWalletError] = useState<string | null>(null);
+  const [walletSuccessMessage, setWalletSuccessMessage] = useState("");
+  const [backupKey, setBackupKey] = useState<string | null>(null);
+  const [backupKeyCopied, setBackupKeyCopied] = useState(false);
   const [antiProbingCheck, setAntiProbingCheck] = useState("PASSED");
   const [noiseAdded, setNoiseAdded] = useState(false);
   const [showSecurityDetails, setShowSecurityDetails] = useState(false);
@@ -83,13 +98,35 @@ export default function Home() {
     let cleanup: (() => void) | undefined;
 
     async function syncWalletState() {
+      try {
+        const embeddedWallet = getStoredEmbeddedWallet();
+        if (embeddedWallet) {
+          setWalletAccountId(embeddedWallet.accountId);
+          setWalletSource("embedded");
+        }
+      } catch (error) {
+        setWalletError(error instanceof Error ? error.message : "Could not restore the embedded wallet.");
+      }
+
       const selector = await initializeWalletSelector();
       if (!selector || cancelled) return;
 
       const update = () => {
-        const state = getWalletConnectionState(selector);
-        setWalletAccountId(state.accountId);
-        if (state.connected) {
+        const selectorState = getWalletConnectionState(selector);
+        let embeddedWallet: ReturnType<typeof getStoredEmbeddedWallet> = null;
+        try {
+          embeddedWallet = getStoredEmbeddedWallet();
+        } catch (error) {
+          setWalletError(error instanceof Error ? error.message : "Could not restore the embedded wallet.");
+        }
+        const accountId = selectorState.connected
+          ? selectorState.accountId
+          : embeddedWallet?.accountId ?? null;
+        const source = selectorState.connected ? "selector" : embeddedWallet ? "embedded" : null;
+
+        setWalletAccountId(accountId);
+        setWalletSource(source);
+        if (accountId) {
           setIsConnectModalOpen(false);
           setWalletError(null);
         }
@@ -129,13 +166,55 @@ export default function Home() {
     setIsWalletLoading(true);
     setWalletError(null);
     try {
-      const accountId = await createInstantWallet();
-      setWalletAccountId(accountId);
+      const wallet = generateEmbeddedWallet();
+      setWalletAccountId(wallet.accountId);
+      setWalletSource("embedded");
+      setWalletSuccessMessage(`Instant Wallet Created! Address: ${wallet.accountId}`);
       setIsConnectModalOpen(false);
     } catch (error) {
-      setWalletError(error instanceof Error ? error.message : "Could not start Meteor Wallet onboarding.");
+      setWalletError(error instanceof Error ? error.message : "Could not create an embedded wallet.");
     } finally {
       setIsWalletLoading(false);
+    }
+  }
+
+  function handleImportEmbeddedWallet(secretKey: string) {
+    setIsWalletLoading(true);
+    setWalletError(null);
+    try {
+      const accountId = importEmbeddedPrivateKey(secretKey);
+      setWalletAccountId(accountId);
+      setWalletSource("embedded");
+      setWalletSuccessMessage(`Embedded wallet imported! Address: ${accountId}`);
+      setIsConnectModalOpen(false);
+    } catch (error) {
+      setWalletError(error instanceof Error ? error.message : "Could not import the embedded wallet key.");
+    } finally {
+      setIsWalletLoading(false);
+    }
+  }
+
+  function handleExportEmbeddedWallet() {
+    setWalletError(null);
+    try {
+      const privateKey = getEmbeddedPrivateKey();
+      if (!privateKey) {
+        throw new Error("No embedded wallet key was found in this browser.");
+      }
+      setBackupKey(privateKey);
+      setBackupKeyCopied(false);
+    } catch (error) {
+      setWalletError(error instanceof Error ? error.message : "Could not export the embedded wallet key.");
+    }
+  }
+
+  async function handleCopyBackupKey() {
+    if (!backupKey) return;
+    try {
+      await navigator.clipboard.writeText(backupKey);
+      setBackupKeyCopied(true);
+    } catch (error) {
+      setWalletError(error instanceof Error ? error.message : "Could not copy the backup key.");
     }
   }
 
@@ -156,8 +235,20 @@ export default function Home() {
   async function handleWalletDisconnect() {
     setIsWalletLoading(true);
     try {
-      await disconnectWallet();
-      setWalletAccountId(null);
+      if (walletSource === "embedded") {
+        disconnectEmbeddedWallet();
+      } else {
+        await disconnectWallet();
+      }
+      const selector = await initializeWalletSelector();
+      const selectorState = getWalletConnectionState(selector);
+      const embeddedWallet = getStoredEmbeddedWallet();
+      const connectedAccountId = selectorState.connected
+        ? selectorState.accountId
+        : embeddedWallet?.accountId ?? null;
+      setWalletAccountId(connectedAccountId);
+      setWalletSource(selectorState.connected ? "selector" : embeddedWallet ? "embedded" : null);
+      setWalletSuccessMessage("");
     } catch (error) {
       setWalletError(error instanceof Error ? error.message : "Could not disconnect the wallet.");
     } finally {
@@ -174,31 +265,19 @@ export default function Home() {
   }
 
   async function extractVaultFileText(file: File) {
-    const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
-    if (!isPdf) {
-      return await file.text();
-    }
-
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    const binary = Array.from(bytes, (byte) => String.fromCharCode(byte)).join("");
-    const base64 = btoa(binary);
-
-    const response = await fetch("/api/query-tee", {
+    const formData = new FormData();
+    formData.append("file", file);
+    const response = await fetch("/api/vault/parse", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "extract-pdf",
-        fileName: file.name,
-        fileContent: base64,
-      }),
+      body: formData,
     });
 
-    const result = (await response.json()) as QueryResponse;
-    if (!response.ok || !result.extractedText) {
-      throw new Error(result.error || "Unable to extract text from the PDF.");
+    const result = (await response.json()) as VaultParseResponse;
+    if (!response.ok || typeof result.text !== "string") {
+      throw new Error(result.error || `Unable to ingest ${file.name}.`);
     }
 
-    return result.extractedText;
+    return result.text;
   }
 
   async function prepareFilesForVault(datasetFiles: VaultFile[]) {
@@ -241,12 +320,6 @@ export default function Home() {
     const rejectedFiles: string[] = [];
 
     for (const file of Array.from(selectedFiles)) {
-      const isAllowedFile = /\.(csv|json|txt|tsv|pdf)$/i.test(file.name) || ["text/csv", "application/json", "text/plain", "text/tab-separated-values", "application/pdf"].includes(file.type);
-      if (!isAllowedFile || file.size > 1_000_000) {
-        rejectedFiles.push(file.name);
-        continue;
-      }
-
       try {
         const content = await extractVaultFileText(file);
         nextFiles.push({ name: file.name, size: file.size, content });
@@ -268,7 +341,7 @@ export default function Home() {
       setErrorMessage("");
     }
     if (rejectedFiles.length && nextFiles.length === 0) {
-      setErrorMessage(`Unsupported or unreadable file${rejectedFiles.length === 1 ? "" : "s"}: ${rejectedFiles.join(", ")}. Use PDF, CSV, JSON, TXT, or TSV files under 1 MB.`);
+      setErrorMessage(`Unable to ingest file${rejectedFiles.length === 1 ? "" : "s"}: ${rejectedFiles.join(", ")}.`);
     }
   }
 
@@ -460,6 +533,16 @@ export default function Home() {
                 >
                   Disconnect
                 </button>
+                {walletSource === "embedded" && (
+                  <button
+                    type="button"
+                    onClick={handleExportEmbeddedWallet}
+                    className="border border-[#34d399]/25 px-2 py-2 font-mono text-[9px] uppercase tracking-[0.12em] text-[#74e7b5] transition hover:border-[#34d399]/55 hover:bg-[#34d399]/[0.06]"
+                    aria-label="Export embedded wallet backup key"
+                  >
+                    Export Key
+                  </button>
+                )}
               </div>
             ) : (
               <button
@@ -526,7 +609,6 @@ export default function Home() {
                 ref={fileInputRef}
                 type="file"
                 multiple
-                accept=".csv,.json,.txt,.tsv,.pdf,text/csv,application/json,text/plain,text/tab-separated-values,application/pdf"
                 className="sr-only"
                 disabled={isEncrypting || isValuing || isPreparingDataset}
                 onChange={handleFileChange}
@@ -891,12 +973,83 @@ export default function Home() {
           </button>
         </div>
       )}
+      {walletSuccessMessage && (
+        <div
+          role="status"
+          className="fixed bottom-5 right-5 z-20 w-[min(460px,calc(100vw-40px))] border border-[#34d399]/35 bg-[#0d1b16] p-4 text-xs leading-5 text-[#a7f3d0] shadow-2xl shadow-black/40"
+        >
+          <div className="flex items-start justify-between gap-4">
+            <span className="break-all">{walletSuccessMessage}</span>
+            <button
+              type="button"
+              onClick={() => setWalletSuccessMessage("")}
+              aria-label="Dismiss wallet created message"
+              className="shrink-0 font-mono text-sm text-[#a7f3d0]/70 hover:text-[#a7f3d0]"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
+      {backupKey && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-md"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setBackupKey(null);
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="backup-key-title"
+            className="relative w-full max-w-[520px] border border-white/10 bg-[#0B0F17] p-5 shadow-[0_24px_100px_rgba(0,0,0,0.65)] sm:p-7"
+          >
+            <button
+              type="button"
+              onClick={() => setBackupKey(null)}
+              aria-label="Close backup key dialog"
+              className="absolute right-4 top-4 grid size-8 place-items-center border border-white/10 text-[#98a49f] transition hover:border-white/25 hover:text-white"
+            >
+              ×
+            </button>
+            <h2 id="backup-key-title" className="pr-10 text-xl font-medium text-white">
+              Export Backup Key
+            </h2>
+            <p className="mt-2 text-xs leading-5 text-[#9ba9a1]">
+              Import this key in another browser to access the same implicit account.
+            </p>
+            <div className="mt-5 border border-[#f0b66a]/25 bg-[#f0b66a]/[0.06] p-3 text-xs leading-5 text-[#f0c98e]">
+              Anyone with this private key can control your wallet. Store it securely and never share it.
+            </div>
+            <textarea
+              readOnly
+              aria-label="Embedded wallet private key"
+              value={backupKey}
+              onFocus={(event) => event.currentTarget.select()}
+              className="mt-4 min-h-20 w-full resize-none border border-white/10 bg-[#080c0d] p-3 font-mono text-xs leading-5 text-[#d5dfd9] outline-none focus:border-[#34d399]/40"
+            />
+            <div className="mt-3 flex items-center justify-between gap-3">
+              <span role="status" className="text-xs text-[#74e7b5]">
+                {backupKeyCopied ? "Backup key copied." : ""}
+              </span>
+              <button
+                type="button"
+                onClick={() => void handleCopyBackupKey()}
+                className="border border-[#34d399]/35 bg-[#34d399]/10 px-4 py-2 font-mono text-[10px] uppercase tracking-[0.1em] text-[#74e7b5] transition hover:border-[#54edb0]/70"
+              >
+                Copy key
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
       <ConnectModal
         open={isConnectModalOpen}
         isLoading={isWalletLoading}
         error={walletError}
         onClose={() => setIsConnectModalOpen(false)}
         onCreateInstantWallet={() => void handleCreateInstantWallet()}
+        onImportPrivateKey={handleImportEmbeddedWallet}
         onConnectExistingWallet={() => void handleExistingWalletConnect()}
       />
     </div>
