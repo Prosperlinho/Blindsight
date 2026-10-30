@@ -30,7 +30,10 @@ export async function POST(req: NextRequest) {
     // 2. PDF Parsing (Isolated Dynamic Import to prevent Serverless module crashes)
     if (!extractedText && (file.type.includes('pdf') || /\.pdf$/i.test(file.name))) {
       try {
-        const pdfParse = (await import('pdf-parse')).default;
+        // pdf-parse exposes different shapes through its ESM and CJS entry points.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const pdfModule: any = await import('pdf-parse');
+        const pdfParse = pdfModule.default || pdfModule;
         const pdfData = await pdfParse(buffer);
         extractedText = pdfData.text;
       } catch (pdfErr) {
@@ -59,7 +62,7 @@ export async function POST(req: NextRequest) {
       text: extractedText,
       antiProbingCheck: 'PASSED',
     });
-  } catch (err) {
+  } catch {
     // Root fail-safe: Returns HTTP 200 so UI file upload never triggers a "Request failed" alert
     return NextResponse.json({
       success: true,
