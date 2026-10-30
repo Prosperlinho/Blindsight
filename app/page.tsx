@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
+import ConnectModal from "@/components/ConnectModal";
 import { executeDataPayout } from "@/lib/executeSettlement";
-import { disconnectWallet, getWalletConnectionState, initializeWalletSelector, openWalletModal } from "@/lib/nearWallet";
+import { createInstantWallet, disconnectWallet, getWalletConnectionState, initializeWalletSelector, openWalletModal } from "@/lib/nearWallet";
 
 type VaultFile = {
   name: string;
@@ -70,6 +71,8 @@ export default function Home() {
   const [runCount, setRunCount] = useState(0);
   const [walletAccountId, setWalletAccountId] = useState<string | null>(null);
   const [isWalletLoading, setIsWalletLoading] = useState(false);
+  const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
+  const [walletError, setWalletError] = useState<string | null>(null);
   const [antiProbingCheck, setAntiProbingCheck] = useState("PASSED");
   const [noiseAdded, setNoiseAdded] = useState(false);
   const [showSecurityDetails, setShowSecurityDetails] = useState(false);
@@ -86,6 +89,10 @@ export default function Home() {
       const update = () => {
         const state = getWalletConnectionState(selector);
         setWalletAccountId(state.accountId);
+        if (state.connected) {
+          setIsConnectModalOpen(false);
+          setWalletError(null);
+        }
       };
 
       update();
@@ -101,7 +108,11 @@ export default function Home() {
       };
     }
 
-    void syncWalletState();
+    void syncWalletState().catch((error: unknown) => {
+      if (!cancelled) {
+        setWalletError(error instanceof Error ? error.message : "Wallet selector could not be initialized.");
+      }
+    });
 
     return () => {
       cancelled = true;
@@ -109,10 +120,34 @@ export default function Home() {
     };
   }, []);
 
-  async function handleWalletConnect() {
+  function handleWalletConnect() {
+    setWalletError(null);
+    setIsConnectModalOpen(true);
+  }
+
+  async function handleCreateInstantWallet() {
     setIsWalletLoading(true);
+    setWalletError(null);
+    try {
+      const accountId = await createInstantWallet();
+      setWalletAccountId(accountId);
+      setIsConnectModalOpen(false);
+    } catch (error) {
+      setWalletError(error instanceof Error ? error.message : "Could not start Meteor Wallet onboarding.");
+    } finally {
+      setIsWalletLoading(false);
+    }
+  }
+
+  async function handleExistingWalletConnect() {
+    setIsConnectModalOpen(false);
+    setIsWalletLoading(true);
+    setWalletError(null);
     try {
       await openWalletModal();
+    } catch (error) {
+      setWalletError(error instanceof Error ? error.message : "Could not open the wallet selector.");
+      setIsConnectModalOpen(true);
     } finally {
       setIsWalletLoading(false);
     }
@@ -123,6 +158,8 @@ export default function Home() {
     try {
       await disconnectWallet();
       setWalletAccountId(null);
+    } catch (error) {
+      setWalletError(error instanceof Error ? error.message : "Could not disconnect the wallet.");
     } finally {
       setIsWalletLoading(false);
     }
@@ -838,6 +875,30 @@ export default function Home() {
           </button>
         </div>
       )}
+      {walletError && !isConnectModalOpen && (
+        <div
+          role="alert"
+          className="fixed bottom-5 left-5 z-20 flex max-w-[min(420px,calc(100vw-40px))] items-start gap-4 border border-[#ff9a83]/25 bg-[#1a1111] px-4 py-3 text-xs leading-5 text-[#ffb5a0] shadow-2xl shadow-black/40"
+        >
+          <span>{walletError}</span>
+          <button
+            type="button"
+            onClick={() => setWalletError(null)}
+            aria-label="Dismiss wallet error"
+            className="font-mono text-sm text-[#ffb5a0]/70 hover:text-[#ffb5a0]"
+          >
+            ×
+          </button>
+        </div>
+      )}
+      <ConnectModal
+        open={isConnectModalOpen}
+        isLoading={isWalletLoading}
+        error={walletError}
+        onClose={() => setIsConnectModalOpen(false)}
+        onCreateInstantWallet={() => void handleCreateInstantWallet()}
+        onConnectExistingWallet={() => void handleExistingWalletConnect()}
+      />
     </div>
   );
 }

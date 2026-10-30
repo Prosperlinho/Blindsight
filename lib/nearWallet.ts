@@ -1,6 +1,7 @@
-import type { WalletSelector } from "@near-wallet-selector/core";
+import type { InjectedWallet, WalletSelector } from "@near-wallet-selector/core";
 import { setupWalletSelector } from "@near-wallet-selector/core";
 import { setupModal, type WalletSelectorModal } from "@near-wallet-selector/modal-ui";
+import { setupMeteorWallet } from "@near-wallet-selector/meteor-wallet";
 import { setupMyNearWallet } from "@near-wallet-selector/my-near-wallet";
 
 let selectorPromise: Promise<WalletSelector> | null = null;
@@ -19,7 +20,7 @@ export async function initializeWalletSelector(): Promise<WalletSelector | null>
   if (!selectorPromise) {
     selectorPromise = setupWalletSelector({
       network: "testnet",
-      modules: [setupMyNearWallet()],
+      modules: [setupMyNearWallet(), setupMeteorWallet()],
       debug: false,
       optimizeWalletOrder: true,
       randomizeWalletOrder: false,
@@ -55,10 +56,27 @@ export function getWalletConnectionState(selector: WalletSelector | null): NearW
 export async function openWalletModal() {
   const selector = await initializeWalletSelector();
   if (!selector || !modalInstance) {
-    return;
+    throw new Error("Wallet selector could not be initialized.");
   }
 
   modalInstance.show();
+}
+
+export async function createInstantWallet() {
+  const selector = await initializeWalletSelector();
+  if (!selector) {
+    throw new Error("Wallet selector could not be initialized.");
+  }
+
+  const meteorWallet = await selector.wallet<InjectedWallet>("meteor-wallet");
+  const accounts = await meteorWallet.signIn({});
+  const accountId = accounts[0]?.accountId;
+
+  if (!accountId) {
+    throw new Error("Meteor Wallet did not return a connected account.");
+  }
+
+  return accountId;
 }
 
 export async function disconnectWallet() {
