@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import ConnectModal from "@/components/ConnectModal";
+import QueryVault from "@/components/QueryVault";
 import { executeDataPayout } from "@/lib/executeSettlement";
 import {
   createInstantWallet as generateEmbeddedWallet,
@@ -69,14 +70,12 @@ export default function Home() {
   const [agentBid, setAgentBid] = useState<AgentBid | null>(null);
   const [acceptedBid, setAcceptedBid] = useState<AgentBid | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [query, setQuery] = useState("");
   const [insight, setInsight] = useState("");
   const [attestationToken, setAttestationToken] = useState("");
   const [settlementHash, setSettlementHash] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
   const [providerAddress, setProviderAddress] = useState("provider.near");
-  const [isRunning, setIsRunning] = useState(false);
   const [buyerBalance, setBuyerBalance] = useState(0);
   const [isDepositing, setIsDepositing] = useState(false);
   const [runCount, setRunCount] = useState(0);
@@ -89,8 +88,6 @@ export default function Home() {
   const [backupKey, setBackupKey] = useState<string | null>(null);
   const [backupKeyCopied, setBackupKeyCopied] = useState(false);
   const [antiProbingCheck, setAntiProbingCheck] = useState("PASSED");
-  const [noiseAdded, setNoiseAdded] = useState(false);
-  const [showSecurityDetails, setShowSecurityDetails] = useState(false);
   const [rateLimitAlert, setRateLimitAlert] = useState(false);
 
   useEffect(() => {
@@ -280,7 +277,7 @@ export default function Home() {
     return result.text;
   }
 
-  async function prepareFilesForVault(datasetFiles: VaultFile[]) {
+  async function prepareFilesForVault(datasetFiles: VaultFile[], judgeDemo = false) {
     setPreparedDatasetId("");
     setVaultQueued(false);
     setCiphertext("");
@@ -306,12 +303,51 @@ export default function Home() {
         throw new Error(result.error || "Dataset preparation failed.");
       }
       setPreparedDatasetId(result.datasetId);
+      if (judgeDemo) {
+        const demoBid: AgentBid = {
+          bidAmountInUSDC: "0.05",
+          rowCount: 6,
+          ratePerRowUSDC: "0.0083",
+          justification: "Fixed sample bid for the hackathon judge demo.",
+        };
+        setCiphertext("SAMPLE_DATASET_ENCRYPTION_PREVIEW");
+        setVaultQueued(true);
+        setBuyerBalance(50);
+        setAgentBid(demoBid);
+        setAcceptedBid(demoBid);
+      }
       setErrorMessage("");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Dataset preparation failed.");
     } finally {
       setIsPreparingDataset(false);
     }
+  }
+
+  async function loadSampleDataset() {
+    const sampleContent = [
+      "quarter,region,revenue_usd,projected_revenue_usd,customer_growth_percent",
+      "Q1 2025,North America,12400000,13800000,8.2",
+      "Q2 2025,North America,13100000,14500000,9.1",
+      "Q3 2025,Europe,9700000,11200000,7.4",
+      "Q4 2025,Asia Pacific,10800000,12600000,10.3",
+      "Q1 2026,North America,14200000,15900000,11.2",
+      "Q2 2026,Europe,11500000,13200000,9.8",
+    ].join("\n");
+    const sampleFiles: VaultFile[] = [{
+      name: "Q3 Financials.csv",
+      size: new Blob([sampleContent]).size,
+      content: sampleContent,
+    }];
+
+    setFiles(sampleFiles);
+    setInsight("");
+    setAttestationToken("");
+    setSettlementHash("");
+    setSuccessMessage("");
+    setErrorMessage("");
+    setRateLimitAlert(false);
+    await prepareFilesForVault(sampleFiles, true);
   }
 
   async function addFiles(selectedFiles: FileList | File[]) {
@@ -413,11 +449,9 @@ export default function Home() {
     void addFiles(event.dataTransfer.files);
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!query.trim() || files.length === 0 || !preparedDatasetId || !vaultQueued || !acceptedBid || buyerBalance < 10 || isRunning) return;
+  async function handleSubmit(submittedQuery: string): Promise<boolean> {
+    if (!submittedQuery.trim() || files.length === 0 || !preparedDatasetId || !vaultQueued || !acceptedBid || buyerBalance < 10) return false;
 
-    setIsRunning(true);
     setErrorMessage("");
     setRateLimitAlert(false);
     setSuccessMessage("");
@@ -433,7 +467,7 @@ export default function Home() {
         body: JSON.stringify({
           datasetId: preparedDatasetId,
           dataset,
-          query: query.trim(),
+          query: submittedQuery.trim(),
           ciphertextPreview: ciphertext,
           encryptionMode: "mock-aes-256",
           userId: walletAccountId ?? "anonymous-agent",
@@ -444,7 +478,6 @@ export default function Home() {
       if (!response.ok) {
         const nextStatus = result.antiProbingCheck ?? "BLOCKED";
         setAntiProbingCheck(nextStatus);
-        setNoiseAdded(Boolean(result.noiseAdded));
         if (response.status === 429) {
           setRateLimitAlert(true);
           setErrorMessage(result.error || "Potential probing attack detected. Rate limit applied to protect privacy.");
@@ -459,7 +492,6 @@ export default function Home() {
       }
 
       setAntiProbingCheck(result.antiProbingCheck ?? "PASSED");
-      setNoiseAdded(Boolean(result.noiseAdded));
       setRateLimitAlert(false);
       setBuyerBalance((balance) => balance - 10);
       const payout = await executeDataPayout(
@@ -472,10 +504,10 @@ export default function Home() {
       setSettlementHash(payout.transactionHash);
       setRunCount((count) => count + 1);
       setSuccessMessage(`Mock USDC settlement ${payout.status.toLowerCase()}.`);
+      return true;
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Confidential query failed.");
-    } finally {
-      setIsRunning(false);
+      return false;
     }
   }
 
@@ -750,184 +782,27 @@ export default function Home() {
             </div>
           </section>
 
-          <section className="flex min-w-0 flex-col border border-white/[0.09] bg-[#0d1314]">
-            <div className="flex items-center justify-between border-b border-white/[0.07] px-5 py-4">
-              <div className="flex items-center gap-3">
-                <span className="font-mono text-[10px] text-[#72d9d0]">02</span>
-                <h2 className="text-[13px] font-medium tracking-wide">Research Console</h2>
-              </div>
-              <div className="flex items-center gap-2 font-mono text-[9px] uppercase tracking-[0.1em] text-[#78857f]">
-                <span className="size-1.5 rounded-full bg-[#72d9d0] shadow-[0_0_8px_#72d9d0]" />
-                Private session
-              </div>
-            </div>
-
-            <div className="flex flex-1 flex-col p-5">
-              <div className="mb-5 flex flex-wrap items-center justify-between gap-3 border border-[#72d9d0]/20 bg-[#72d9d0]/[0.04] px-4 py-3">
-                <div>
-                  <div className="font-mono text-[9px] uppercase tracking-[0.12em] text-[#829088]">Agent Escrow Balance</div>
-                  <div className="mt-1 font-mono text-[16px] font-semibold text-[#72d9d0]">{buyerBalance} USDC</div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => void handleDeposit()}
-                  disabled={isDepositing || buyerBalance >= 50}
-                  className="flex h-9 items-center justify-center gap-2 border border-[#b5ff82]/30 px-3 font-mono text-[9px] font-semibold uppercase tracking-[0.1em] text-[#b5ff82] transition hover:border-[#b5ff82]/60 hover:bg-[#b5ff82]/[0.06] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <span>{isDepositing ? "Funding agent..." : buyerBalance >= 50 ? "Agent funded" : "Deposit 50 USDC to Agent"}</span>
-                  {isDepositing && <span aria-hidden="true">···</span>}
-                </button>
-              </div>
-              <div className="mb-3 flex items-center justify-between">
-                <label htmlFor="research-query" className="font-mono text-[9px] uppercase tracking-[0.14em] text-[#829088]">Inference prompt</label>
-                <span className="font-mono text-[9px] text-[#59665f]">NATURAL LANGUAGE</span>
-              </div>
-              <form onSubmit={handleSubmit}>
-                <div className="border border-white/[0.1] bg-[#090e0f] transition focus-within:border-[#72d9d0]/50">
-                  <div className="flex items-start gap-3 px-4 pt-4">
-                    <span className="mt-0.5 font-mono text-[12px] text-[#72d9d0]">&gt;_</span>
-                    <textarea
-                      id="research-query"
-                      value={query}
-                      onChange={(event) => setQuery(event.target.value)}
-                      rows={3}
-                      maxLength={500}
-                      placeholder="Ask a question of private data..."
-                      className="min-h-[76px] flex-1 resize-y bg-transparent text-[13px] leading-6 text-[#d5ded8] outline-none placeholder:text-[#526059]"
-                    />
-                  </div>
-                  <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.07] px-4 py-3">
-                    <span className="font-mono text-[9px] text-[#64716b]">{query.length} / 500 <span className="mx-2 text-[#3b4741]">|</span> Context: provider vault</span>
-                    <button
-                      type="submit"
-                      disabled={!query.trim() || files.length === 0 || !preparedDatasetId || !vaultQueued || !acceptedBid || buyerBalance < 10 || isRunning}
-                      className="flex h-9 items-center gap-3 bg-[#72d9d0] px-4 font-mono text-[9px] font-semibold uppercase tracking-[0.12em] text-[#071312] transition hover:bg-[#8ce9df] disabled:cursor-wait disabled:opacity-60"
-                    >
-                      <span>{isRunning ? "Querying dataset" : "Run Confidential Query"}</span>
-                      <span aria-hidden="true">{isRunning ? "···" : "↗"}</span>
-                    </button>
-                  </div>
-                </div>
-              </form>
-
-              <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_130px]">
-                <label className="min-w-0">
-                  <span className="mb-2 block font-mono text-[9px] uppercase tracking-[0.12em] text-[#75827b]">Provider destination</span>
-                  <input
-                    value={providerAddress}
-                    onChange={(event) => setProviderAddress(event.target.value)}
-                    maxLength={128}
-                    placeholder="provider.near"
-                    className="h-10 w-full border border-white/[0.1] bg-[#090e0f] px-3 font-mono text-[11px] text-[#cbd5cf] outline-none transition placeholder:text-[#526059] focus:border-[#72d9d0]/50"
-                  />
-                </label>
-                <label>
-                  <span className="mb-2 block font-mono text-[9px] uppercase tracking-[0.12em] text-[#75827b]">Accepted bid · USDC</span>
-                  <input
-                    value={acceptedBid?.bidAmountInUSDC ?? ""}
-                    readOnly
-                    placeholder="Accept agent bid"
-                    className="h-10 w-full border border-white/[0.1] bg-[#090e0f] px-3 font-mono text-[11px] text-[#cbd5cf] outline-none placeholder:text-[#526059]"
-                  />
-                </label>
-              </div>
-
-              <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-y border-white/[0.07] py-3 font-mono text-[9px] uppercase tracking-[0.1em]">
-                <span className="text-[#6f7b75]">Execution output <span className="ml-2 text-[#56635d]">#{String(runCount).padStart(3, "0")}</span></span>
-                <span className="flex items-center gap-2 text-[#f0b66a]"><span className="size-1.5 rounded-full bg-[#f0b66a]" /> Mock attestation · mock settlement</span>
-              </div>
-
-              {rateLimitAlert && (
-                <div role="alert" className="mt-4 border border-[#f59e0b]/35 bg-[#f59e0b]/[0.08] px-4 py-3 shadow-[0_0_18px_rgba(245,158,11,0.12)]">
-                  <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-[#fbbf24]">⚠️ Probing Attempt Blocked</div>
-                  <div className="mt-1 text-[11px] leading-5 text-[#fdde9e]">Query threshold exceeded for this dataset to prevent reconstruction attacks.</div>
-                </div>
-              )}
-
-              {errorMessage && !rateLimitAlert && (
-                <div role="alert" className="mt-4 border border-[#ff9a83]/25 bg-[#ff9a83]/[0.06] px-4 py-3 font-mono text-[10px] leading-5 text-[#ffad9b]">
-                  <span className="mr-2 uppercase tracking-[0.1em]">Request failed</span>{errorMessage}
-                </div>
-              )}
-
-              {insight && antiProbingCheck === "PASSED" && (
-                <div className="mt-4 overflow-hidden border border-[#34d399]/30 bg-[#0d1b1d] shadow-[0_0_0_1px_rgba(16,185,129,0.12),0_0_22px_rgba(16,185,129,0.18)]">
-                  <div className="flex items-start justify-between gap-3 px-4 py-3">
-                    <div className="flex items-start gap-3">
-                      <span className="mt-0.5 text-[15px]" aria-hidden="true">🛡️</span>
-                      <div>
-                        <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-[#a7f3d0]">🔒 Anti-Probing &amp; DP Active</div>
-                        <div className="mt-1 text-[10px] text-[#7dd9ae]">Differential Privacy Noise Applied • Zero Raw Data Leak</div>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setShowSecurityDetails((current) => !current)}
-                      className="border border-[#34d399]/25 bg-[#0f172a]/60 px-2 py-1 font-mono text-[8px] uppercase tracking-[0.12em] text-[#bbf7d0] transition hover:border-[#34d399]/45"
-                    >
-                      {showSecurityDetails ? "Hide" : "Details"}
-                    </button>
-                  </div>
-                  {showSecurityDetails && (
-                    <div className="border-t border-[#34d399]/15 bg-[#0b1417] px-4 py-3 font-mono text-[9px] uppercase tracking-[0.08em] text-[#c6f0d3]">
-                      <div className="flex items-center justify-between gap-3 py-1">
-                        <span>Rate Limit Check</span>
-                        <span className="text-[#a7f3d0]">PASSED (1/5 queries used)</span>
-                      </div>
-                      <div className="flex items-center justify-between gap-3 py-1">
-                        <span>Enclave Memory</span>
-                        <span className="text-[#a7f3d0]">Decrypted &amp; Cleared</span>
-                      </div>
-                      <div className="flex items-center justify-between gap-3 py-1">
-                        <span>Hardware Proof</span>
-                        <span className="text-[#a7f3d0]">AMD SEV-SNP Verified</span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(210px,0.8fr)]">
-                <div className="min-w-0 border border-white/[0.07] bg-[#0a0f10] p-4 sm:p-5">
-                  <div className="mb-4 flex items-center gap-2 font-mono text-[9px] uppercase tracking-[0.13em] text-[#84918a]">
-                    <span className="text-[#72d9d0]">{"//"}</span> Insight report
-                  </div>
-                  <p aria-live="polite" className="text-[12px] leading-[1.8] text-[#bbc7c0]">
-                    {isRunning ? (
-                      <span className="animate-pulse text-[#72d9d0]">Sending dataset and query to NEAR AI Cloud...</span>
-                    ) : insight || "No query has run. Select and queue a dataset, then submit a research prompt."}
-                  </p>
-                  <div className="mt-5 flex flex-wrap gap-2">
-                    <span className="border border-[#72d9d0]/15 bg-[#72d9d0]/[0.05] px-2 py-1 font-mono text-[9px] text-[#82dcd4]">CONFIDENTIAL COMPUTE</span>
-                    <span className="border border-white/[0.08] px-2 py-1 font-mono text-[9px] text-[#77847d]">{files.length ? `${files.length} PROVIDER FILE${files.length === 1 ? "" : "S"}` : "NO DATASET"}</span>
-                  </div>
-                </div>
-
-                <aside className="relative overflow-hidden border border-[#b5ff82]/20 bg-[#111a14] p-4 sm:p-5">
-                  <div className="absolute right-0 top-0 h-20 w-20 border-b border-l border-[#b5ff82]/10" />
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-[#b5ff82]">Mock TEE attestation</span>
-                    <span className="grid size-7 place-items-center border border-[#b5ff82]/25 font-mono text-xs text-[#b5ff82]">{attestationToken ? "✓" : "·"}</span>
-                  </div>
-                  <div className="mt-4 text-[11px] font-medium leading-5 text-[#d6e2d9]">
-                    {attestationToken ? "Intel TDX / NVIDIA Hardware Verification: PASSED" : "Awaiting gateway response"}
-                  </div>
-                  <div className="mt-1 text-[10px] text-[#78877c]">{attestationToken ? "Mock prefix accepted · not hardware proof" : "No attestation token received"}</div>
-                  <div className="my-4 h-px bg-[#b5ff82]/15" />
-                  <div className="font-mono text-[9px] uppercase tracking-[0.1em] text-[#718076]">Attestation token</div>
-                  <code className="mt-2 block break-all font-mono text-[10px] leading-5 text-[#b5ff82]/80">{attestationToken || "--"}</code>
-                  <div className="mt-4 flex items-center justify-between border-t border-[#b5ff82]/10 pt-3 font-mono text-[9px] text-[#718076]">
-                    <span>TEE / SGX</span><span>NEAR AI Cloud</span>
-                  </div>
-                </aside>
-              </div>
-
-              <div className="mt-4 flex flex-wrap items-center justify-between gap-2 font-mono text-[9px] uppercase tracking-[0.08em] text-[#5f6d66]">
-                <span>Hardware attestation is mocked for this MVP</span>
-                <span className="flex items-center gap-2"><span className="text-[#f0b66a]">●</span> Settlement mocked for MVP</span>
-              </div>
-            </div>
-          </section>
+          <QueryVault
+            key={preparedDatasetId || "unprepared"}
+            fileCount={files.length}
+            queryReady={Boolean(preparedDatasetId && vaultQueued && acceptedBid && buyerBalance >= 10)}
+            isPreparingDataset={isPreparingDataset}
+            buyerBalance={buyerBalance}
+            isDepositing={isDepositing}
+            acceptedBid={acceptedBid?.bidAmountInUSDC ?? null}
+            providerAddress={providerAddress}
+            errorMessage={errorMessage}
+            rateLimitAlert={rateLimitAlert}
+            insight={insight}
+            antiProbingCheck={antiProbingCheck}
+            attestationToken={attestationToken}
+            transactionHash={settlementHash}
+            runCount={runCount}
+            onProviderAddressChange={setProviderAddress}
+            onDeposit={() => void handleDeposit()}
+            onLoadSampleDataset={loadSampleDataset}
+            onRunQuery={handleSubmit}
+          />
         </div>
 
         <footer className="mt-6 flex flex-col gap-3 border-t border-white/[0.07] pt-4 font-mono text-[9px] uppercase tracking-[0.1em] text-[#58665f] sm:flex-row sm:items-center sm:justify-between">

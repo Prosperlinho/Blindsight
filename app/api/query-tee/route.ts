@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-// eslint-disable-next-line @typescript-eslint/no-var-requires
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const pdfParse = require("pdf-parse");
 import OpenAI from "openai";
 import { attestedJsonResponse } from "@/lib/attestedResponse";
@@ -126,15 +126,15 @@ function checkQueryHistoryLimit(dataset: PreparedDataset, query: string, userId:
   return { blocked: false, message: "OK" };
 }
 
-function applyDifferentialPrivacy(insight: string) {
+function applyDemoNoise(insight: string) {
   const isNumericSummary = /\b(sum|total|average|mean|median|count|aggregate|rows|records|amount|value|avg)\b/i.test(insight);
   const match = insight.match(/-?\d+(?:\.\d+)?/);
   if (!match || !isNumericSummary) {
     return { insight, noiseAdded: false };
   }
 
-  const epsilon = 1.0;
-  const noise = (Math.random() - 0.5) * (1 / epsilon);
+  const demoNoiseParameter = 0.5;
+  const noise = (Math.random() - 0.5) * (1 / demoNoiseParameter);
   const originalValue = Number(match[0]);
   const noisyValue = Number((originalValue + noise).toFixed(2));
   const updatedInsight = insight.replace(match[0], String(noisyValue));
@@ -278,7 +278,7 @@ export async function POST(request: Request) {
       return attestedJsonResponse({ error: "The inference gateway returned no insight.", antiProbingCheck: "PASSED", noiseAdded: false }, 502);
     }
 
-    const protectedInsight = applyDifferentialPrivacy(insight);
+    const protectedInsight = applyDemoNoise(insight);
     return attestedJsonResponse({
       insight: protectedInsight.insight,
       attestationToken: MOCK_ATTESTATION_TOKEN,
