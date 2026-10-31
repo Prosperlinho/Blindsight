@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
+import Image from "next/image";
 import ConnectModal from "@/components/ConnectModal";
 import QueryVault from "@/components/QueryVault";
 import { executeDataPayout } from "@/lib/executeSettlement";
@@ -540,10 +541,14 @@ BLINDSIGHT Q3 FINANCIAL & MARKET DEMAND REPORT (CONFIDENTIAL)
       <header className="border-b border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl">
         <div className="mx-auto flex h-[68px] max-w-[1500px] items-center justify-between px-5 sm:px-8">
           <a href="#home" className="flex items-center gap-3" aria-label="BlindSight home">
-            <span className="relative grid size-8 place-items-center border border-[#34D399]/45 bg-[#34D399]/[0.08]">
-              <span className="size-2.5 rotate-45 border border-[#10B981]" />
-              <span className="absolute h-px w-5 bg-[#10B981]/65" />
-            </span>
+            <Image
+              src="/logo.png"
+              alt="Blindsight Logo"
+              width={36}
+              height={36}
+              className="h-9 w-9 object-contain drop-shadow-[0_0_10px_rgba(16,185,129,0.4)]"
+              priority
+            />
             <span className="text-[13px] font-semibold tracking-[0.1em]">BlindSight</span>
             <span className="hidden border-l border-emerald-500/20 pl-3 text-[11px] text-[#A7B9B0] sm:block">
               Private data, useful answers
