@@ -15,12 +15,13 @@ type QueryVaultProps = {
   insight: string;
   antiProbingCheck: string;
   attestationToken: string;
+  isOfflineDemoAnswer: boolean;
   transactionHash: string;
   runCount: number;
   onProviderAddressChange: (address: string) => void;
   onDismissError: () => void;
   onDeposit: () => void;
-  onLoadSampleDataset: () => Promise<void>;
+  onLoadSampleDataset: () => void;
   onRunQuery: (query: string) => Promise<boolean>;
 };
 
@@ -75,6 +76,7 @@ export default function QueryVault({
   insight,
   antiProbingCheck,
   attestationToken,
+  isOfflineDemoAnswer,
   transactionHash,
   runCount,
   onProviderAddressChange,
@@ -87,17 +89,7 @@ export default function QueryVault({
   const [isExecuting, setIsExecuting] = useState(false);
   const [activeStep, setActiveStep] = useState(-1);
   const [queriesUsed, setQueriesUsed] = useState(0);
-  const [isLoadingSample, setIsLoadingSample] = useState(false);
   const remainingQueries = Math.max(0, 5 - queriesUsed);
-
-  async function handleLoadSampleDataset() {
-    setIsLoadingSample(true);
-    try {
-      await onLoadSampleDataset();
-    } finally {
-      setIsLoadingSample(false);
-    }
-  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -128,7 +120,7 @@ export default function QueryVault({
   }
 
   const entropyScore = calculateEntropyScore(query);
-  const pipelineComplete = Boolean(insight) && antiProbingCheck === "PASSED";
+  const pipelineComplete = !isOfflineDemoAnswer && Boolean(insight) && antiProbingCheck === "PASSED";
 
   return (
     <section className="flex min-w-0 flex-col border border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl transition-colors hover:border-emerald-500/40">
@@ -168,11 +160,11 @@ export default function QueryVault({
           </div>
           <button
             type="button"
-            onClick={() => void handleLoadSampleDataset()}
-            disabled={isLoadingSample || isPreparingDataset || isExecuting}
+            onClick={onLoadSampleDataset}
+            disabled={isPreparingDataset || isExecuting}
             className="shrink-0 bg-emerald-500 px-3 py-2 text-[11px] font-semibold text-slate-950 shadow-lg shadow-emerald-500/20 transition-all hover:bg-emerald-400 disabled:cursor-wait disabled:opacity-55"
           >
-            {isLoadingSample || isPreparingDataset ? "Loading sample..." : "Load Sample Dataset"}
+            {isPreparingDataset ? "Loading sample..." : "Load Sample Dataset"}
           </button>
         </div>
 
@@ -250,7 +242,7 @@ export default function QueryVault({
                 ? true
                 : isExecuting
                   ? activeStep > index
-                  : activeStep === PIPELINE_STEPS.length;
+                  : !isOfflineDemoAnswer && activeStep === PIPELINE_STEPS.length;
 
               return (
                 <li
@@ -269,8 +261,12 @@ export default function QueryVault({
                     {isComplete ? "✓" : String(index + 1).padStart(2, "0")}
                   </span>
                   <span className="min-w-0">
-                    <span className="block text-[12px] font-medium text-[#E2F8EC]">{step.title}</span>
-                    <span className="mt-1 block text-[10px] leading-4 text-[#A7B9B0]">{step.detail}</span>
+                    <span className="block text-[12px] font-medium text-[#E2F8EC]">
+                      {isOfflineDemoAnswer ? "Not run in offline demo" : step.title}
+                    </span>
+                    <span className="mt-1 block text-[10px] leading-4 text-[#A7B9B0]">
+                      {isOfflineDemoAnswer ? "No server attestation or query checks were performed." : step.detail}
+                    </span>
                   </span>
                   {isActive && <span className="ml-auto mt-1 size-2 shrink-0 animate-pulse rounded-full bg-emerald-500" />}
                 </li>
@@ -311,11 +307,27 @@ export default function QueryVault({
             <div>
               <div className="text-[13px] font-medium text-[#F0FDF4]">Answer</div>
               <div className="mt-1 text-[10px] text-[#A7B9B0]">
-                Query {runCount ? `#${runCount}` : "not run"} · {attestationToken ? "demo token received" : "waiting for a question"}
+                Query {runCount ? `#${runCount}` : "not run"} · {
+                  isOfflineDemoAnswer
+                    ? "local fallback · not attested"
+                    : attestationToken
+                      ? "demo token received"
+                      : "waiting for a question"
+                }
               </div>
             </div>
-            <span className="border border-emerald-500/20 px-2 py-1 text-[10px] text-[#D1FAE5]">
-              {insight && antiProbingCheck === "PASSED" ? "Result ready" : isExecuting ? "Executing" : "Answer preview"}
+            <span className={`border px-2 py-1 text-[10px] ${
+              isOfflineDemoAnswer
+                ? "border-amber-500/30 text-amber-300"
+                : "border-emerald-500/20 text-[#D1FAE5]"
+            }`}>
+              {isOfflineDemoAnswer
+                ? "Demo only · not attested"
+                : insight && antiProbingCheck === "PASSED"
+                  ? "Result ready"
+                  : isExecuting
+                    ? "Executing"
+                    : "Answer preview"}
             </span>
           </div>
           <div aria-live="polite" className="min-h-24 px-4 py-5 text-[14px] leading-7 text-[#E2F8EC]">
@@ -323,6 +335,11 @@ export default function QueryVault({
               ? "Running query checks and preparing a confidential result..."
               : insight || "Load a dataset and ask a question to see a confidential insight."}
           </div>
+          {isOfflineDemoAnswer && (
+            <div className="border-t border-amber-500/20 bg-amber-950/20 px-4 py-3 text-[11px] leading-5 text-amber-200" role="status">
+              This is a local placeholder, not a dataset analysis or attested answer. No server checks or settlement were performed.
+            </div>
+          )}
           {insight && antiProbingCheck === "PASSED" && (
             <div className="border-t border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl p-4">
               <div className="mb-3 flex items-center gap-2 text-[11px] font-medium text-[#10B981]">

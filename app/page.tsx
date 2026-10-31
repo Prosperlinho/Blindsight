@@ -92,6 +92,7 @@ export default function Home() {
   const [isDragging, setIsDragging] = useState(false);
   const [insight, setInsight] = useState("");
   const [attestationToken, setAttestationToken] = useState("");
+  const [isOfflineDemoAnswer, setIsOfflineDemoAnswer] = useState(false);
   const [settlementHash, setSettlementHash] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
@@ -284,23 +285,32 @@ export default function Home() {
   async function extractVaultFileText(file: File) {
     const formData = new FormData();
     formData.append("file", file);
-    const response = await fetch("/api/vault/parse", {
-      method: "POST",
-      body: formData,
-    });
+    try {
+      const response = await fetch("/api/vault/parse", {
+        method: "POST",
+        body: formData,
+      });
 
-    const result = (await readJsonResponse(response)) as VaultParseResponse;
-    if (!response.ok || !result.success || typeof result.text !== "string") {
-      throw new Error(result.error || `Unable to ingest ${file.name}.`);
+      const result = (await readJsonResponse(response)) as VaultParseResponse;
+      if (!response.ok || !result.success || typeof result.text !== "string") {
+        throw new Error(result.error || `Unable to ingest ${file.name}.`);
+      }
+
+      return result.text;
+    } catch (error) {
+      const text = await file.text();
+      if (!text.trim()) {
+        throw new Error(`Unable to read ${file.name} with the server parser or browser text fallback.`, { cause: error });
+      }
+      return text;
     }
-
-    return result.text;
   }
 
   async function prepareFilesForVault(datasetFiles: VaultFile[]) {
     setPreparedDatasetId("");
     setVaultQueued(false);
     setCiphertext("");
+    setIsOfflineDemoAnswer(false);
     setAgentBid(null);
     setAcceptedBid(null);
     setIsPreparingDataset(true);
@@ -331,7 +341,7 @@ export default function Home() {
     }
   }
 
-  async function loadSampleDataset() {
+  function loadSampleDataset() {
     const sampleContent = `
 BLINDSIGHT CONFIDENTIAL DATASET - FINANCIAL & MARKET DEMAND REPORT
 
@@ -367,6 +377,7 @@ BLINDSIGHT CONFIDENTIAL DATASET - FINANCIAL & MARKET DEMAND REPORT
     setBuyerBalance(50);
     setInsight("");
     setAttestationToken("");
+    setIsOfflineDemoAnswer(false);
     setSettlementHash("");
     setSuccessMessage("");
     setErrorMessage("");
@@ -481,23 +492,37 @@ BLINDSIGHT CONFIDENTIAL DATASET - FINANCIAL & MARKET DEMAND REPORT
     setSuccessMessage("");
     setInsight("");
     setAttestationToken("");
+    setIsOfflineDemoAnswer(false);
     setSettlementHash("");
 
     try {
       const dataset = files.map((file) => `### ${file.name}\n${file.content}`).join("\n\n");
-      const response = await fetch("/api/query-tee", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          datasetId: preparedDatasetId,
-          dataset,
-          query: submittedQuery.trim(),
-          ciphertextPreview: ciphertext,
-          encryptionMode: "mock-aes-256",
-          userId: walletAccountId ?? "anonymous-agent",
-          agentId: walletAccountId ?? "anonymous-agent",
-        }),
-      });
+      let response: Response;
+      try {
+        response = await fetch("/api/query-tee", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            datasetId: preparedDatasetId,
+            dataset,
+            query: submittedQuery.trim(),
+            ciphertextPreview: ciphertext,
+            encryptionMode: "mock-aes-256",
+            userId: walletAccountId ?? "anonymous-agent",
+            agentId: walletAccountId ?? "anonymous-agent",
+          }),
+        });
+      } catch {
+        setIsOfflineDemoAnswer(true);
+        setAntiProbingCheck("SIMULATED");
+        setInsight(
+          `Offline demo response: Your question was "${submittedQuery.trim()}". ` +
+          `The dataset contains ${files.length} file${files.length === 1 ? "" : "s"}. ` +
+          "The query server is unreachable, so no dataset analysis or server verification was performed.",
+        );
+        setRunCount((count) => count + 1);
+        return true;
+      }
       const result = (await readJsonResponse(response)) as QueryResponse;
       if (!response.ok) {
         const nextStatus = result.antiProbingCheck ?? "BLOCKED";
@@ -824,6 +849,7 @@ BLINDSIGHT CONFIDENTIAL DATASET - FINANCIAL & MARKET DEMAND REPORT
             insight={insight}
             antiProbingCheck={antiProbingCheck}
             attestationToken={attestationToken}
+            isOfflineDemoAnswer={isOfflineDemoAnswer}
             transactionHash={settlementHash}
             runCount={runCount}
             onProviderAddressChange={setProviderAddress}
