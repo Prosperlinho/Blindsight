@@ -6,7 +6,7 @@ export async function POST(req: NextRequest) {
     const file = formData.get('file') as File | null;
 
     if (!file) {
-      return NextResponse.json({ error: 'No file provided' }, { status: 400 });
+      return NextResponse.json({ success: false, error: 'No file provided' }, { status: 400 });
     }
 
     const bytes = await file.arrayBuffer();
@@ -62,13 +62,11 @@ export async function POST(req: NextRequest) {
       text: extractedText,
       antiProbingCheck: 'PASSED',
     });
-  } catch {
-    // Root fail-safe: Returns HTTP 200 so UI file upload never triggers a "Request failed" alert
+  } catch (error) {
+    console.error('Vault file parsing failed:', error);
     return NextResponse.json({
-      success: true,
-      fileName: 'uploaded_document',
-      text: 'Document context successfully encrypted and ingested into TEE enclave memory.',
-      antiProbingCheck: 'PASSED',
-    });
+      success: false,
+      error: 'Unable to parse uploaded file.',
+    }, { status: 500 });
   }
 }

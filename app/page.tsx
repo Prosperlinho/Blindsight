@@ -333,18 +333,17 @@ export default function Home() {
 
   async function loadSampleDataset() {
     const sampleContent = `
-BLINDSIGHT Q3 FINANCIAL & MARKET DEMAND REPORT (CONFIDENTIAL)
+BLINDSIGHT CONFIDENTIAL DATASET - FINANCIAL & MARKET DEMAND REPORT
 
-1. Executive Summary:
-   - Total Revenue: $4.2M (+34% YoY)
+1. Performance Summary:
+   - Total Revenue: $4,200,000 (+34% YoY)
    - TEE Enclave Query Volume: 1,420,000 queries processed
-   - Active Data Monetizers: 850 enterprise vaults
-   - Projected Q4 Revenue: $5.8M
+   - Active Vault Monetizers: 850 Enterprise Accounts
 
-2. Market Demand & Probing Analysis:
-   - Top requested datasets: Financial Statements (42%), Healthcare Cohorts (31%), Code Repositories (27%)
-   - Anti-Probing Guard Metrics: 14,200 malicious query probes blocked automatically.
-   - Differential Privacy Budget (ε): Maintained at 0.5 per file session.
+2. Privacy & Anti-Probing Metrics:
+   - Total Probing Attacks Blocked: 14,200 requests
+   - Differential Privacy Budget (ε): 0.5 per session
+   - Attestation Status: Verified Active (AMD SEV-SNP)
 `.trim();
     const sampleFiles: VaultFile[] = [{
       name: "Q3_Financials_Sample.pdf",
