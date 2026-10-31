@@ -168,7 +168,7 @@ function recordsFromSection(section: DatasetSection): DatasetRecord[] {
     });
   }
 
-  if (extension === "txt") {
+  if (extension === "txt" || extension === "pdf") {
     const lines = section.content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
     if (!lines.length) throw new Error(DATASET_QUALITY_ERROR);
     return lines.map((line) => ({ text: line }));

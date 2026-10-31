@@ -296,7 +296,7 @@ export default function Home() {
     return result.text;
   }
 
-  async function prepareFilesForVault(datasetFiles: VaultFile[], judgeDemo = false) {
+  async function prepareFilesForVault(datasetFiles: VaultFile[]) {
     setPreparedDatasetId("");
     setVaultQueued(false);
     setCiphertext("");
@@ -322,19 +322,6 @@ export default function Home() {
         throw new Error(result.error || "Dataset preparation failed.");
       }
       setPreparedDatasetId(result.datasetId);
-      if (judgeDemo) {
-        const demoBid: AgentBid = {
-          bidAmountInUSDC: "0.05",
-          rowCount: 6,
-          ratePerRowUSDC: "0.0083",
-          justification: "Fixed sample bid for the hackathon judge demo.",
-        };
-        setCiphertext("SAMPLE_DATASET_ENCRYPTION_PREVIEW");
-        setVaultQueued(true);
-        setBuyerBalance(50);
-        setAgentBid(demoBid);
-        setAcceptedBid(demoBid);
-      }
       setErrorMessage("");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Dataset preparation failed.");
@@ -344,29 +331,47 @@ export default function Home() {
   }
 
   async function loadSampleDataset() {
-    const sampleContent = [
-      "quarter,region,revenue_usd,projected_revenue_usd,customer_growth_percent",
-      "Q1 2025,North America,12400000,13800000,8.2",
-      "Q2 2025,North America,13100000,14500000,9.1",
-      "Q3 2025,Europe,9700000,11200000,7.4",
-      "Q4 2025,Asia Pacific,10800000,12600000,10.3",
-      "Q1 2026,North America,14200000,15900000,11.2",
-      "Q2 2026,Europe,11500000,13200000,9.8",
-    ].join("\n");
+    const sampleContent = `
+BLINDSIGHT Q3 FINANCIAL & MARKET DEMAND REPORT (CONFIDENTIAL)
+
+1. Executive Summary:
+   - Total Revenue: $4.2M (+34% YoY)
+   - TEE Enclave Query Volume: 1,420,000 queries processed
+   - Active Data Monetizers: 850 enterprise vaults
+   - Projected Q4 Revenue: $5.8M
+
+2. Market Demand & Probing Analysis:
+   - Top requested datasets: Financial Statements (42%), Healthcare Cohorts (31%), Code Repositories (27%)
+   - Anti-Probing Guard Metrics: 14,200 malicious query probes blocked automatically.
+   - Differential Privacy Budget (ε): Maintained at 0.5 per file session.
+`.trim();
     const sampleFiles: VaultFile[] = [{
-      name: "Q3 Financials.csv",
-      size: new Blob([sampleContent]).size,
+      name: "Q3_Financials_Sample.pdf",
+      size: 148520,
       content: sampleContent,
     }];
 
     setFiles(sampleFiles);
+    setPreparedDatasetId(window.crypto.randomUUID());
+    setIsPreparingDataset(false);
+    setVaultQueued(true);
+    setCiphertext("SAMPLE_DATASET_PREVIEW");
+    const demoBid: AgentBid = {
+      bidAmountInUSDC: "0.05",
+      rowCount: 6,
+      ratePerRowUSDC: "0.0083",
+      justification: "Fixed sample bid for the hackathon judge demo.",
+    };
+    setAgentBid(demoBid);
+    setAcceptedBid(demoBid);
+    setBuyerBalance(50);
     setInsight("");
     setAttestationToken("");
     setSettlementHash("");
     setSuccessMessage("");
     setErrorMessage("");
     setRateLimitAlert(false);
-    await prepareFilesForVault(sampleFiles, true);
+    setAntiProbingCheck("PASSED");
   }
 
   async function addFiles(selectedFiles: FileList | File[]) {
