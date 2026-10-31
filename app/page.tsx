@@ -536,42 +536,42 @@ BLINDSIGHT Q3 FINANCIAL & MARKET DEMAND REPORT (CONFIDENTIAL)
   }
 
   return (
-    <div className="min-h-screen bg-[#111914] text-[#e5e8dc]">
-      <header className="border-b border-[#39463d] bg-[#111914]">
+    <div className="min-h-screen text-[#F0FDF4]">
+      <header className="border-b border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl">
         <div className="mx-auto flex h-[68px] max-w-[1500px] items-center justify-between px-5 sm:px-8">
           <a href="#home" className="flex items-center gap-3" aria-label="BlindSight home">
-            <span className="relative grid size-8 place-items-center border border-[#9dae8c]/45 bg-[#9dae8c]/[0.08]">
-              <span className="size-2.5 rotate-45 border border-[#c9f27a]" />
-              <span className="absolute h-px w-5 bg-[#c9f27a]/65" />
+            <span className="relative grid size-8 place-items-center border border-[#34D399]/45 bg-[#34D399]/[0.08]">
+              <span className="size-2.5 rotate-45 border border-[#10B981]" />
+              <span className="absolute h-px w-5 bg-[#10B981]/65" />
             </span>
             <span className="text-[13px] font-semibold tracking-[0.1em]">BlindSight</span>
-            <span className="hidden border-l border-[#39463d] pl-3 text-[11px] text-[#a4afa0] sm:block">
+            <span className="hidden border-l border-emerald-500/20 pl-3 text-[11px] text-[#A7B9B0] sm:block">
               Private data, useful answers
             </span>
           </a>
 
           <div className="flex items-center gap-2 sm:gap-4">
-            <div className="hidden items-center gap-2 text-[11px] text-[#a4afa0] sm:flex">
-              <span className="size-1.5 rounded-full bg-[#c9f27a]" />
+            <div className="hidden items-center gap-2 text-[11px] text-[#A7B9B0] sm:flex">
+              <span className="size-1.5 rounded-full bg-emerald-500" />
               Query gateway preview
             </div>
-            <div className="h-5 w-px bg-[#39463d]" />
+            <div className="h-5 w-px bg-[#047857]" />
             <div
-              className="hidden items-center gap-2 border border-[#39463d] bg-[#18221c] px-2.5 py-1.5 text-[10px] text-[#b7c0b1] md:flex"
+              className="hidden items-center gap-2 border border-emerald-500/30 bg-emerald-950/40 px-2.5 py-1.5 text-[10px] text-emerald-400 md:flex"
               title="NEAR settlement is simulated in this prototype."
             >
-              <span className="size-1.5 rounded-full bg-[#9dae8c]" />
+              <span className="size-1.5 rounded-full bg-[#34D399]" />
               <span>NEAR testnet · preview</span>
             </div>
             {walletAccountId ? (
               <div className="flex items-center gap-2">
                 <div
-                  className="flex items-center gap-2 border border-[#9dae8c]/40 bg-[#18221c] px-2.5 py-2 text-[10px] text-[#e5e8dc]"
+                  className="flex items-center gap-2 border border-[#34D399]/40 bg-[#0B0F17]/80 backdrop-blur-xl px-2.5 py-2 text-[10px] text-[#F0FDF4]"
                   title={walletAccountId}
                 >
                   <span className="inline-flex items-center gap-2">
-                    <span className="size-1.5 rounded-full bg-[#c9f27a]" />
-                    <span className="text-[#a4afa0]">Wallet</span>
+                    <span className="size-1.5 rounded-full bg-emerald-500" />
+                    <span className="text-[#A7B9B0]">Wallet</span>
                   </span>
                   <span className="max-w-[150px] truncate">{walletAccountId.length > 18 ? `${walletAccountId.slice(0, 8)}...${walletAccountId.slice(-8)}` : walletAccountId}</span>
                 </div>
@@ -579,7 +579,7 @@ BLINDSIGHT Q3 FINANCIAL & MARKET DEMAND REPORT (CONFIDENTIAL)
                   type="button"
                   onClick={() => void handleWalletDisconnect()}
                   disabled={isWalletLoading}
-                  className="border border-[#39463d] px-2 py-2 text-[10px] text-[#a4afa0] transition hover:border-[#c18d7d]/60 hover:text-[#e3b2a1] disabled:cursor-wait disabled:opacity-60"
+                  className="border border-emerald-500/20 px-2 py-2 text-[10px] text-[#A7B9B0] transition hover:border-[#F87171]/60 hover:text-[#FCA5A5] disabled:cursor-wait disabled:opacity-60"
                   aria-label={`Disconnect wallet ${walletAccountId}`}
                 >
                   Disconnect
@@ -588,7 +588,7 @@ BLINDSIGHT Q3 FINANCIAL & MARKET DEMAND REPORT (CONFIDENTIAL)
                   <button
                     type="button"
                     onClick={handleExportEmbeddedWallet}
-                    className="border border-[#9dae8c]/35 px-2 py-2 text-[10px] text-[#c9f27a] transition hover:border-[#c9f27a]/65 hover:bg-[#c9f27a]/[0.06]"
+                    className="border border-emerald-500/30 bg-emerald-950/40 px-2 py-2 text-[10px] text-emerald-400 transition hover:border-emerald-500/40"
                     aria-label="Export embedded wallet backup key"
                   >
                     Export Key
@@ -600,7 +600,7 @@ BLINDSIGHT Q3 FINANCIAL & MARKET DEMAND REPORT (CONFIDENTIAL)
                 type="button"
                 onClick={() => void handleWalletConnect()}
                 disabled={isWalletLoading}
-                className="flex items-center gap-2 border border-[#9dae8c]/55 bg-[#c9f27a] px-3 py-2 text-[11px] font-medium text-[#182018] transition hover:bg-[#d9f995] disabled:cursor-wait disabled:opacity-60"
+                className="flex items-center gap-2 border border-emerald-500/40 bg-emerald-500 px-3 py-2 text-[11px] font-semibold text-slate-950 shadow-lg shadow-emerald-500/20 transition-all hover:bg-emerald-400 disabled:cursor-wait disabled:opacity-60"
               >
                 <span>{isWalletLoading ? "Connecting..." : "Connect Wallet"}</span>
               </button>
@@ -610,30 +610,30 @@ BLINDSIGHT Q3 FINANCIAL & MARKET DEMAND REPORT (CONFIDENTIAL)
       </header>
 
       <main id="home" className="mx-auto max-w-[1420px] px-5 pb-12 pt-9 sm:px-8 sm:pt-12">
-        <section className="mb-9 grid gap-8 border-b border-[#39463d] pb-8 lg:grid-cols-[minmax(0,1.35fr)_minmax(260px,0.65fr)] lg:items-end">
+        <section className="mb-9 grid gap-8 border-b border-emerald-500/20 pb-8 lg:grid-cols-[minmax(0,1.35fr)_minmax(260px,0.65fr)] lg:items-end">
           <div>
-            <p className="mb-4 text-[12px] text-[#a4afa0]">A private data workspace</p>
-            <h1 className="max-w-[780px] font-serif text-[clamp(42px,7vw,82px)] leading-[0.98] tracking-[-0.045em] text-[#e5e8dc]">
+            <p className="mb-4 text-[12px] text-[#A7B9B0]">A private data workspace</p>
+            <h1 className="max-w-[780px] font-serif text-[clamp(42px,7vw,82px)] leading-[0.98] tracking-[-0.045em] text-[#F0FDF4]">
               Questions out.
               <br />
-              Files stay in<span className="text-[#c9f27a]">.</span>
+              Files stay in<span className="text-[#10B981]">.</span>
             </h1>
-            <p className="mt-5 max-w-[540px] text-[14px] leading-6 text-[#a4afa0]">
+            <p className="mt-5 max-w-[540px] text-[14px] leading-6 text-[#A7B9B0]">
               Ask for the insight you need. Keep the source on your side.
-              <span className="mt-2 block text-[12px] text-[#839080]">
+              <span className="mt-2 block text-[12px] text-[#7D9187]">
                 Prototype note: dataset text is sent to NEAR AI Cloud; enclave and settlement steps are simulated.
               </span>
             </p>
           </div>
           <div aria-hidden="true" className="hidden min-h-[150px] items-end justify-end lg:flex">
-            <svg viewBox="0 0 360 150" fill="none" className="w-full max-w-[370px] text-[#9dae8c]">
+            <svg viewBox="0 0 360 150" fill="none" className="w-full max-w-[370px] text-[#34D399]">
               <path d="M56 78h110m28 0h110" stroke="currentColor" strokeOpacity=".5" strokeWidth="1.5" />
-              <path d="m157 73 9 5-9 5m46-10-9 5 9 5" stroke="#c9f27a" strokeWidth="1.5" />
+              <path d="m157 73 9 5-9 5m46-10-9 5 9 5" stroke="#10B981" strokeWidth="1.5" />
               <rect x="14" y="34" width="70" height="88" rx="1" stroke="currentColor" strokeOpacity=".65" />
               <path d="M29 56h39M29 68h31M29 80h34M29 92h23" stroke="currentColor" strokeOpacity=".65" />
               <circle cx="180" cy="78" r="31" stroke="currentColor" strokeOpacity=".7" />
-              <circle cx="180" cy="78" r="20" stroke="#c9f27a" strokeOpacity=".75" />
-              <path d="M174 78h12m-6-6v12" stroke="#c9f27a" strokeWidth="1.4" />
+              <circle cx="180" cy="78" r="20" stroke="#10B981" strokeOpacity=".75" />
+              <path d="M174 78h12m-6-6v12" stroke="#10B981" strokeWidth="1.4" />
               <rect x="276" y="45" width="70" height="66" rx="1" stroke="currentColor" strokeOpacity=".65" />
               <path d="M291 64h39m-39 12h32m-32 12h24" stroke="currentColor" strokeOpacity=".65" />
               <text x="14" y="139" fill="currentColor" fontSize="9">SOURCE</text>
@@ -644,22 +644,22 @@ BLINDSIGHT Q3 FINANCIAL & MARKET DEMAND REPORT (CONFIDENTIAL)
         </section>
 
         <div className="grid gap-5 xl:grid-cols-[minmax(310px,0.78fr)_minmax(0,1.65fr)]">
-          <section className="min-w-0 border border-[#39463d] bg-[#18221c]">
-            <div className="flex items-center justify-between border-b border-[#39463d] px-5 py-4">
+          <section className="min-w-0 border border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl transition-colors hover:border-emerald-500/40">
+            <div className="flex items-center justify-between border-b border-emerald-500/20 px-5 py-4">
               <div className="flex items-center gap-3">
-                <span className="size-2 rotate-45 border border-[#c9f27a]" />
+                <span className="size-2 rotate-45 border border-[#10B981]" />
                 <h2 className="text-[14px] font-medium">Your source files</h2>
               </div>
-              <span className="text-[10px] text-[#a4afa0]">Dataset intake</span>
+              <span className="text-[10px] text-[#A7B9B0]">Dataset intake</span>
             </div>
 
             <div className="p-5">
               <div className="mb-4 flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-[13px] text-[#d3d9cd]">Add a file to begin.</p>
-                  <p className="mt-1 text-[12px] leading-5 text-[#a4afa0]">Its extracted text is sent to the configured inference service.</p>
+                  <p className="text-[13px] text-[#E2F8EC]">Add a file to begin.</p>
+                  <p className="mt-1 text-[12px] leading-5 text-[#A7B9B0]">Its extracted text is sent to the configured inference service.</p>
                 </div>
-                <span className="border border-[#9dae8c]/35 px-2 py-1 text-[10px] text-[#b7c0b1]">Text preview</span>
+                <span className="border border-[#34D399]/35 px-2 py-1 text-[10px] text-[#D1FAE5]">Text preview</span>
               </div>
 
               <input
@@ -678,7 +678,7 @@ BLINDSIGHT Q3 FINANCIAL & MARKET DEMAND REPORT (CONFIDENTIAL)
                   if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsDragging(false);
                 }}
                 onDrop={handleDrop}
-                className={`group flex min-h-[220px] cursor-pointer flex-col items-center justify-center border border-dashed px-5 text-center transition-colors ${isDragging ? "border-[#c9f27a] bg-[#c9f27a]/[0.06]" : "border-[#526052] bg-[#111914] hover:border-[#9dae8c] hover:bg-[#1d2921]"}`}
+                className={`group flex min-h-[220px] cursor-pointer flex-col items-center justify-center border border-dashed px-5 text-center transition-colors ${isDragging ? "border-[#10B981] bg-[#10B981]/[0.06]" : "border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl hover:border-[#34D399] hover:bg-emerald-950/40"}`}
                 onClick={() => { if (!isEncrypting && !isValuing && !isPreparingDataset) fileInputRef.current?.click(); }}
                 role="button"
                 tabIndex={0}
@@ -689,15 +689,15 @@ BLINDSIGHT Q3 FINANCIAL & MARKET DEMAND REPORT (CONFIDENTIAL)
                   }
                 }}
               >
-                <span className="mb-4 grid size-11 place-items-center border border-[#9dae8c]/45 bg-[#9dae8c]/[0.06] text-2xl text-[#c9f27a] transition group-hover:border-[#c9f27a]/70">
+                <span className="mb-4 grid size-11 place-items-center border border-[#34D399]/45 bg-[#34D399]/[0.06] text-2xl text-[#10B981] transition group-hover:border-[#10B981]/70">
                   +
                 </span>
-                <span className="text-[13px] font-medium text-[#e5e8dc]">Drop files here</span>
-                <span className="mt-1.5 text-[12px] text-[#a4afa0]">or <span className="text-[#c9f27a] underline underline-offset-2">browse your device</span></span>
-                <span className="mt-5 text-[10px] text-[#839080]">PDF, CSV, JSON, text, code, and more</span>
+                <span className="text-[13px] font-medium text-[#F0FDF4]">Drop files here</span>
+                <span className="mt-1.5 text-[12px] text-[#A7B9B0]">or <span className="text-[#10B981] underline underline-offset-2">browse your device</span></span>
+                <span className="mt-5 text-[10px] text-[#7D9187]">PDF, CSV, JSON, text, code, and more</span>
               </div>
 
-              <div className="mt-5 flex items-center justify-between text-[11px] text-[#a4afa0]">
+              <div className="mt-5 flex items-center justify-between text-[11px] text-[#A7B9B0]">
                 <span>Attached files</span>
                 <span>{files.length} {files.length === 1 ? "file" : "files"}</span>
               </div>
@@ -706,10 +706,10 @@ BLINDSIGHT Q3 FINANCIAL & MARKET DEMAND REPORT (CONFIDENTIAL)
                   {files.map((file, index) => (
                     <li key={`${file.name}-${index}`} className="flex items-center justify-between gap-3 py-3">
                       <div className="flex min-w-0 items-center gap-3">
-                        <span className="grid size-9 shrink-0 place-items-center border border-[#39463d] text-[10px] text-[#c9f27a]">{file.name.split(".").pop()?.slice(0, 4).toUpperCase()}</span>
+                        <span className="grid size-9 shrink-0 place-items-center border border-emerald-500/20 text-[10px] text-[#10B981]">{file.name.split(".").pop()?.slice(0, 4).toUpperCase()}</span>
                         <span className="min-w-0">
-                          <span className="block truncate text-[11px] text-[#cbd5cf]">{file.name}</span>
-                          <span className="mt-1 block text-[10px] text-[#a4afa0]">{formatBytes(file.size)} · ready</span>
+                          <span className="block truncate text-[11px] text-[#D1FAE5]">{file.name}</span>
+                          <span className="mt-1 block text-[10px] text-[#A7B9B0]">{formatBytes(file.size)} · ready</span>
                         </span>
                       </div>
                       <button
@@ -724,7 +724,7 @@ BLINDSIGHT Q3 FINANCIAL & MARKET DEMAND REPORT (CONFIDENTIAL)
                           void prepareFilesForVault(remainingFiles);
                         }}
                         disabled={isEncrypting || isValuing || isPreparingDataset}
-                        className="shrink-0 px-2 py-1 text-[10px] text-[#a4afa0] hover:text-[#e3b2a1]"
+                        className="shrink-0 px-2 py-1 text-[10px] text-[#A7B9B0] hover:text-[#FCA5A5]"
                         aria-label={`Remove ${file.name}`}
                       >
                         REMOVE
@@ -733,37 +733,37 @@ BLINDSIGHT Q3 FINANCIAL & MARKET DEMAND REPORT (CONFIDENTIAL)
                   ))}
                 </ul>
               ) : (
-                <div className="mt-2 flex items-center gap-3 border-y border-[#39463d] py-4">
-                  <span className="grid size-8 shrink-0 place-items-center border border-[#39463d] text-[11px] text-[#839080]">+</span>
+                <div className="mt-2 flex items-center gap-3 border-y border-emerald-500/20 py-4">
+                  <span className="grid size-8 shrink-0 place-items-center border border-emerald-500/20 text-[11px] text-[#7D9187]">+</span>
                   <div>
-                    <div className="text-[12px] text-[#c4cbbf]">No files yet</div>
-                    <div className="mt-1 text-[11px] text-[#839080]">Your dataset will appear here.</div>
+                    <div className="text-[12px] text-[#D1FAE5]">No files yet</div>
+                    <div className="mt-1 text-[11px] text-[#7D9187]">Your dataset will appear here.</div>
                   </div>
                 </div>
               )}
 
-              <div className="mt-5 border-l-2 border-[#c9f27a]/55 pl-3 text-[11px] leading-5 text-[#a4afa0]">
+              <div className="mt-5 border-l-2 border-[#10B981]/55 pl-3 text-[11px] leading-5 text-[#A7B9B0]">
                 This preview does not encrypt the source. File text is sent for inference.
               </div>
               <button
                 type="button"
                 onClick={() => void handleEncryptPayload()}
                 disabled={files.length === 0 || !preparedDatasetId || isPreparingDataset || isEncrypting}
-                className="mt-5 flex h-11 w-full items-center justify-center gap-2 bg-[#c9f27a] text-[12px] font-semibold text-[#182018] transition hover:bg-[#d9f995] disabled:cursor-not-allowed disabled:bg-[#39463d] disabled:text-[#a4afa0]"
+                className="mt-5 flex h-11 w-full items-center justify-center gap-2 bg-emerald-500 shadow-lg shadow-emerald-500/20 text-[12px] font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-[#047857] disabled:text-[#A7B9B0]"
               >
                 <span>{isPreparingDataset ? "Preparing dataset..." : isEncrypting ? "Preparing preview..." : "Prepare dataset"}</span><span aria-hidden="true">{isPreparingDataset || isEncrypting ? "···" : "→"}</span>
               </button>
-              <div className="mt-3 flex justify-center gap-2 text-[10px] text-[#839080]">
+              <div className="mt-3 flex justify-center gap-2 text-[10px] text-[#7D9187]">
                 <span>{isPreparingDataset ? "Checking the dataset structure" : vaultQueued ? "Dataset preview is ready" : "Prepare the dataset to continue"}</span>
               </div>
               {(isEncrypting || vaultQueued) && (
-                <div className="mt-4 border border-[#39463d] bg-[#111914] p-3 text-[10px] leading-5">
+                <div className="mt-4 border border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl p-3 text-[10px] leading-5">
                   {isEncrypting ? (
-                    <pre aria-live="polite" className="max-h-28 overflow-hidden break-all whitespace-pre-wrap text-[#c9f27a]/80">{ciphertext}</pre>
+                    <pre aria-live="polite" className="max-h-28 overflow-hidden break-all whitespace-pre-wrap text-[#10B981]/80">{ciphertext}</pre>
                   ) : (
                     <>
-                      <div role="status" className="text-[#c9f27a]">Encryption preview ready. No source encryption is performed.</div>
-                      <code className="mt-2 block max-h-24 overflow-auto break-all text-[#9dae8c]/80">{ciphertext}</code>
+                      <div role="status" className="text-[#10B981]">Encryption preview ready. No source encryption is performed.</div>
+                      <code className="mt-2 block max-h-24 overflow-auto break-all text-[#34D399]/80">{ciphertext}</code>
                     </>
                   )}
                 </div>
@@ -774,28 +774,28 @@ BLINDSIGHT Q3 FINANCIAL & MARKET DEMAND REPORT (CONFIDENTIAL)
                     type="button"
                     onClick={() => void requestAgentValuation()}
                     disabled={isValuing}
-                    className="flex h-10 w-full items-center justify-center gap-2 border border-[#9dae8c]/40 bg-[#9dae8c]/[0.06] text-[12px] font-medium text-[#d3d9cd] transition hover:border-[#c9f27a]/60 hover:bg-[#9dae8c]/[0.1] disabled:cursor-wait disabled:opacity-60"
+                    className="flex h-10 w-full items-center justify-center gap-2 border border-[#34D399]/40 bg-[#34D399]/[0.06] text-[12px] font-medium text-[#E2F8EC] transition hover:border-[#10B981]/60 hover:bg-[#34D399]/[0.1] disabled:cursor-wait disabled:opacity-60"
                   >
                     {isValuing ? "Agent evaluating metadata..." : "Request Agent Valuation"}
                   </button>
                   {agentBid && (
-                    <div className="mt-3 border border-[#526052] bg-[#1d2921] p-4">
+                    <div className="mt-3 border border-emerald-500/20 bg-emerald-950/40 p-4">
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
-                          <div className="text-[11px] text-[#a4afa0]">Agent bid · demo</div>
-                          <div className="mt-1 text-[25px] font-medium leading-8 text-[#e5e8dc]">{agentBid.bidAmountInUSDC} <span className="text-[12px] text-[#a4afa0]">USDC</span></div>
+                          <div className="text-[11px] text-[#A7B9B0]">Agent bid · demo</div>
+                          <div className="mt-1 text-[25px] font-medium leading-8 text-[#F0FDF4]">{agentBid.bidAmountInUSDC} <span className="text-[12px] text-[#A7B9B0]">USDC</span></div>
                         </div>
-                        <div className="text-right text-[10px] leading-5 text-[#a4afa0]">
+                        <div className="text-right text-[10px] leading-5 text-[#A7B9B0]">
                           <div>{agentBid.rowCount.toLocaleString()} estimated rows</div>
                           <div>${agentBid.ratePerRowUSDC} / row</div>
                         </div>
                       </div>
-                      <p className="mt-3 text-[12px] leading-5 text-[#c4cbbf]">{agentBid.justification}</p>
+                      <p className="mt-3 text-[12px] leading-5 text-[#D1FAE5]">{agentBid.justification}</p>
                       <button
                         type="button"
                         onClick={() => setAcceptedBid(agentBid)}
                         disabled={acceptedBid === agentBid}
-                        className="mt-4 flex h-10 w-full items-center justify-center gap-2 bg-[#c9f27a] px-3 text-[12px] font-semibold text-[#182018] transition hover:bg-[#d9f995] disabled:cursor-not-allowed disabled:bg-[#39463d] disabled:text-[#a4afa0]"
+                        className="mt-4 flex h-10 w-full items-center justify-center gap-2 bg-emerald-500 shadow-lg shadow-emerald-500/20 px-3 text-[12px] font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-[#047857] disabled:text-[#A7B9B0]"
                       >
                         {acceptedBid === agentBid ? "Bid Accepted · Authorized" : "Accept Bid & Authorize"}
                       </button>
@@ -833,7 +833,7 @@ BLINDSIGHT Q3 FINANCIAL & MARKET DEMAND REPORT (CONFIDENTIAL)
           />
         </div>
 
-        <footer className="mt-7 flex flex-col gap-3 border-t border-[#39463d] pt-4 text-[10px] text-[#839080] sm:flex-row sm:items-center sm:justify-between">
+        <footer className="mt-7 flex flex-col gap-3 border-t border-emerald-500/20 pt-4 text-[10px] text-[#7D9187] sm:flex-row sm:items-center sm:justify-between">
           <span>BlindSight · Confidential data marketplace</span>
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
             <span>NEAR settlement · simulated</span>
@@ -843,17 +843,17 @@ BLINDSIGHT Q3 FINANCIAL & MARKET DEMAND REPORT (CONFIDENTIAL)
         </footer>
       </main>
       {successMessage && settlementHash && (
-        <div role="status" className="fixed bottom-5 right-5 z-20 w-[min(420px,calc(100vw-40px))] border border-[#526052] bg-[#18221c] p-4 shadow-2xl shadow-black/40">
-          <div className="flex items-center gap-2 text-[12px] font-medium text-[#c9f27a]">
-            <span className="grid size-5 place-items-center border border-[#526052]">✓</span>
+        <div role="status" className="fixed bottom-5 right-5 z-20 w-[min(420px,calc(100vw-40px))] border border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl p-4 shadow-2xl shadow-black/40">
+          <div className="flex items-center gap-2 text-[12px] font-medium text-[#10B981]">
+            <span className="grid size-5 place-items-center border border-emerald-500/20">✓</span>
             {successMessage}
           </div>
-          <code className="mt-2 block break-all font-mono text-[10px] leading-5 text-[#9ba99f]">{settlementHash}</code>
-          <span className="mt-2 block text-[10px] text-[#a4afa0]">Synthetic hash · no funds moved</span>
+          <code className="mt-2 block break-all font-mono text-[10px] leading-5 text-[#A7B9B0]">{settlementHash}</code>
+          <span className="mt-2 block text-[10px] text-[#A7B9B0]">Synthetic hash · no funds moved</span>
           <button
             type="button"
             onClick={() => setSuccessMessage("")}
-            className="absolute right-3 top-3 px-1 text-[14px] text-[#a4afa0] hover:text-[#e5e8dc]"
+            className="absolute right-3 top-3 px-1 text-[14px] text-[#A7B9B0] hover:text-[#F0FDF4]"
             aria-label="Dismiss settlement message"
           >
             ×
@@ -863,14 +863,14 @@ BLINDSIGHT Q3 FINANCIAL & MARKET DEMAND REPORT (CONFIDENTIAL)
       {walletError && !isConnectModalOpen && (
         <div
           role="alert"
-          className="fixed bottom-5 left-5 z-20 flex max-w-[min(420px,calc(100vw-40px))] items-start gap-4 border border-[#9e6d60]/50 bg-[#2b211e] px-4 py-3 text-xs leading-5 text-[#e3b2a1] shadow-2xl shadow-black/40"
+          className="fixed bottom-5 left-5 z-20 flex max-w-[min(420px,calc(100vw-40px))] items-start gap-4 border border-[#7F1D1D]/50 bg-[#261719] px-4 py-3 text-xs leading-5 text-[#FCA5A5] shadow-2xl shadow-black/40"
         >
           <span>{walletError}</span>
           <button
             type="button"
             onClick={() => setWalletError(null)}
             aria-label="Dismiss wallet error"
-            className="text-sm text-[#e3b2a1]/70 hover:text-[#e3b2a1]"
+            className="text-sm text-[#FCA5A5]/70 hover:text-[#FCA5A5]"
           >
             ×
           </button>
@@ -879,7 +879,7 @@ BLINDSIGHT Q3 FINANCIAL & MARKET DEMAND REPORT (CONFIDENTIAL)
       {walletSuccessMessage && (
         <div
           role="status"
-          className="fixed bottom-5 right-5 z-20 w-[min(460px,calc(100vw-40px))] border border-[#526052] bg-[#1d2921] p-4 text-xs leading-5 text-[#d3d9cd] shadow-2xl shadow-black/40"
+          className="fixed bottom-5 right-5 z-20 w-[min(460px,calc(100vw-40px))] border border-emerald-500/20 bg-emerald-950/40 p-4 text-xs leading-5 text-[#E2F8EC] shadow-2xl shadow-black/40"
         >
           <div className="flex items-start justify-between gap-4">
             <span className="break-all">{walletSuccessMessage}</span>
@@ -887,7 +887,7 @@ BLINDSIGHT Q3 FINANCIAL & MARKET DEMAND REPORT (CONFIDENTIAL)
               type="button"
               onClick={() => setWalletSuccessMessage("")}
               aria-label="Dismiss wallet created message"
-              className="shrink-0 text-sm text-[#a4afa0] hover:text-[#e5e8dc]"
+              className="shrink-0 text-sm text-[#A7B9B0] hover:text-[#F0FDF4]"
             >
               ×
             </button>
@@ -905,23 +905,23 @@ BLINDSIGHT Q3 FINANCIAL & MARKET DEMAND REPORT (CONFIDENTIAL)
             role="dialog"
             aria-modal="true"
             aria-labelledby="backup-key-title"
-            className="relative w-full max-w-[520px] border border-[#526052] bg-[#18221c] p-5 shadow-[0_24px_100px_rgba(0,0,0,0.65)] sm:p-7"
+            className="relative w-full max-w-[520px] border border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl p-5 shadow-[0_24px_100px_rgba(0,0,0,0.65)] sm:p-7"
           >
             <button
               type="button"
               onClick={() => setBackupKey(null)}
               aria-label="Close backup key dialog"
-              className="absolute right-4 top-4 grid size-8 place-items-center border border-[#39463d] text-[#a4afa0] transition hover:border-[#9dae8c] hover:text-[#e5e8dc]"
+              className="absolute right-4 top-4 grid size-8 place-items-center border border-emerald-500/20 text-[#A7B9B0] transition hover:border-[#34D399] hover:text-[#F0FDF4]"
             >
               ×
             </button>
-            <h2 id="backup-key-title" className="pr-10 font-serif text-xl font-medium text-[#e5e8dc]">
+            <h2 id="backup-key-title" className="pr-10 font-serif text-xl font-medium text-[#F0FDF4]">
               Export Backup Key
             </h2>
-            <p className="mt-2 text-xs leading-5 text-[#a4afa0]">
+            <p className="mt-2 text-xs leading-5 text-[#A7B9B0]">
               Import this key in another browser to access the same implicit account.
             </p>
-            <div className="mt-5 border border-[#9d7356]/60 bg-[#34261d] p-3 text-xs leading-5 text-[#f0c99a]">
+            <div className="mt-5 border border-[#F59E0B]/60 bg-[#241C0E] p-3 text-xs leading-5 text-[#FDE68A]">
               Anyone with this private key can control your wallet. Store it securely and never share it.
             </div>
             <textarea
@@ -929,16 +929,16 @@ BLINDSIGHT Q3 FINANCIAL & MARKET DEMAND REPORT (CONFIDENTIAL)
               aria-label="Embedded wallet private key"
               value={backupKey}
               onFocus={(event) => event.currentTarget.select()}
-              className="mt-4 min-h-20 w-full resize-none border border-[#39463d] bg-[#111914] p-3 font-mono text-xs leading-5 text-[#d3d9cd] outline-none focus:border-[#c9f27a]/60"
+              className="mt-4 min-h-20 w-full resize-none border border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl p-3 font-mono text-xs leading-5 text-[#E2F8EC] outline-none focus:border-[#10B981]/60"
             />
             <div className="mt-3 flex items-center justify-between gap-3">
-              <span role="status" className="text-xs text-[#c9f27a]">
+              <span role="status" className="text-xs text-[#10B981]">
                 {backupKeyCopied ? "Backup key copied." : ""}
               </span>
               <button
                 type="button"
                 onClick={() => void handleCopyBackupKey()}
-                className="bg-[#c9f27a] px-4 py-2 text-[11px] font-medium text-[#182018] transition hover:bg-[#d9f995]"
+                className="bg-emerald-500 px-4 py-2 text-[11px] font-semibold text-slate-950 shadow-lg shadow-emerald-500/20 transition-all hover:bg-emerald-400"
               >
                 Copy key
               </button>

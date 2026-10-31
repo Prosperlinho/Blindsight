@@ -2,13 +2,13 @@
 
 :root {
   color-scheme: dark;
-  --background: #111914;
-  --foreground: #e5e8dc;
-  --surface: #18221c;
-  --surface-raised: #1d2921;
-  --line: #39463d;
-  --muted: #a4afa0;
-  --accent: #c9f27a;
+  --background: #0B0F17;
+  --foreground: #F0FDF4;
+  --surface: rgb(11 15 23 / 80%);
+  --surface-raised: #10251e;
+  --line: rgb(16 185 129 / 20%);
+  --muted: #A7B9B0;
+  --accent: #10B981;
 }
 
 @theme inline {
@@ -19,19 +19,79 @@
 }
 
 body {
-  background: var(--background);
+  min-height: 100vh;
+  background-color: #0B0F17;
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(16, 185, 129, 0.15), transparent),
+    linear-gradient(to right, rgba(16, 185, 129, 0.03) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(16, 185, 129, 0.03) 1px, transparent 1px);
+  background-size: 100% 100%, 40px 40px, 40px 40px;
+  background-repeat: no-repeat, repeat, repeat;
+  background-attachment: fixed;
   color: var(--foreground);
   font-family: var(--font-geist-sans), sans-serif;
 }
 
+*,
+*::before,
+*::after {
+  border-color: var(--line);
+}
+
 ::selection {
-  background: rgb(201 242 122 / 28%);
-  color: #f4f6ed;
+  background: rgb(16 185 129 / 28%);
+  color: #F0FDF4;
 }
 
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
+}
+
+button,
+input,
+textarea {
+  color-scheme: dark;
+}
+
+#near-wallet-selector-modal,
+#near-wallet-selector-modal.dark-theme,
+#near-wallet-selector-modal .dark-theme {
+  --backdrop-bg: rgb(2 6 23 / 82%);
+  --heading-color: #F0FDF4;
+  --text-color: #A7B9B0;
+  --sidebar-border-color: rgb(16 185 129 / 20%);
+  --selected-wallet-bg: #065F46;
+  --selected-wallet-bg-hover: #047857;
+  --wallet-option-border-color: rgb(16 185 129 / 25%);
+  --wallet-option-bg-hover: rgb(16 185 129 / 12%);
+  --wallet-option-outline-color: #10B981;
+  --content-bg: #0B0F17;
+  --change-path-bg: #10251E;
+  --home-button-bg: #10251E;
+  --confirm-button-bg: #10B981;
+  --confirm-button-bg-hover: #34D399;
+  --error: #F87171;
+  --close-button-bg-color: #10251E;
+  --close-button-fill-icon-color: #A7B9B0;
+  --spinner-color: #34D399;
+  --bottom-section: #0B0F17;
+  --mobile-text: #F0FDF4;
+  --connected-green: #34D399;
+  --gradient-dark-icon: radial-gradient(124.37% 124.37% at 91.67% -25%, #065F46 0%, #0B0F17 100%);
+  --get-wallet-option-bg-color: #10251E;
+  --get-wallet-option-bg-color-hover: rgb(16 185 129 / 12%);
+  --get-wallet-option-border-color: rgb(16 185 129 / 25%);
+  --get-wallet-option-box-shadow: 0 0 20px rgb(16 185 129 / 8%);
+  --get-wallet-outline-color: #10B981;
+  --secondary-button-bg-color: rgb(16 185 129 / 12%);
+  --secondary-button-border-color: rgb(16 185 129 / 25%);
+  --secondary-button-text-color: #34D399;
+  --what-wallet-icon-color: #34D399;
+  --deprecated-icon-bg-color: #10251E;
+  --deprecated-icon-bg-color-selected: #065F46;
+  --option-wallet-bg-color: #10251E;
+  --option-single-wallet-bg-color: #0B0F17;
 }
 
 @media (prefers-reduced-motion: reduce) {
