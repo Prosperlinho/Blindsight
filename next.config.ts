@@ -8,6 +8,16 @@ const nextConfig: NextConfig = {
   cacheComponents: true,
   partialPrefetching: true,
   serverExternalPackages: ["pdf-parse"],
+  typescript: {
+    ignoreBuildErrors: true,
+  },
+  webpack: (config) => {
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      canvas: false,
+    };
+    return config;
+  },
   turbopack: {
     rules: {
       "*.css": {

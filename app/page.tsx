@@ -33,6 +33,7 @@ type DatasetPreparationResponse = {
   error?: string;
 };
 type VaultParseResponse = {
+  success?: boolean;
   text?: string;
   error?: string;
 };
@@ -46,6 +47,24 @@ type AgentBid = {
 type AgentBidResponse = AgentBid & { error?: string };
 
 const CIPHERTEXT_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+async function readJsonResponse(response: Response): Promise<Record<string, unknown>> {
+  const text = await response.text();
+  if (!text) return {};
+
+  let data: unknown;
+  try {
+    data = JSON.parse(text) as unknown;
+  } catch {
+    console.error("Non-JSON response received:", text);
+    throw new Error("Server returned an invalid response. Please try again.");
+  }
+
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new Error("Server returned an invalid response. Please try again.");
+  }
+  return data as Record<string, unknown>;
+}
 
 function randomCiphertextChunk(length: number) {
   const randomValues = new Uint8Array(length);
@@ -269,8 +288,8 @@ export default function Home() {
       body: formData,
     });
 
-    const result = (await response.json()) as VaultParseResponse;
-    if (!response.ok || typeof result.text !== "string") {
+    const result = (await readJsonResponse(response)) as VaultParseResponse;
+    if (!response.ok || !result.success || typeof result.text !== "string") {
       throw new Error(result.error || `Unable to ingest ${file.name}.`);
     }
 
@@ -298,7 +317,7 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "prepare", dataset }),
       });
-      const result = (await response.json()) as DatasetPreparationResponse;
+      const result = (await readJsonResponse(response)) as DatasetPreparationResponse;
       if (!response.ok || !result.datasetId) {
         throw new Error(result.error || "Dataset preparation failed.");
       }
@@ -424,7 +443,7 @@ export default function Home() {
           fileSizeBytes,
         }),
       });
-      const result = (await response.json()) as AgentBidResponse;
+      const result = (await readJsonResponse(response)) as AgentBidResponse;
       if (!response.ok) throw new Error(result.error || "Agent valuation failed.");
       if (!result.bidAmountInUSDC || !result.justification) {
         throw new Error("The agent returned an incomplete valuation.");
@@ -474,7 +493,7 @@ export default function Home() {
           agentId: walletAccountId ?? "anonymous-agent",
         }),
       });
-      const result = (await response.json()) as QueryResponse;
+      const result = (await readJsonResponse(response)) as QueryResponse;
       if (!response.ok) {
         const nextStatus = result.antiProbingCheck ?? "BLOCKED";
         setAntiProbingCheck(nextStatus);
@@ -512,55 +531,50 @@ export default function Home() {
   }
 
   return (
-    <div className="min-h-screen bg-[#080c0d] text-[#e7eeeb]">
-      <header className="border-b border-white/[0.07] bg-[#0b1011]/90">
+    <div className="min-h-screen bg-[#111914] text-[#e5e8dc]">
+      <header className="border-b border-[#39463d] bg-[#111914]">
         <div className="mx-auto flex h-[68px] max-w-[1500px] items-center justify-between px-5 sm:px-8">
           <a href="#home" className="flex items-center gap-3" aria-label="BlindSight home">
-            <span className="relative grid size-8 place-items-center border border-[#a8f074]/30 bg-[#a8f074]/[0.07]">
-              <span className="size-2.5 rotate-45 border border-[#b5ff82]" />
-              <span className="absolute h-px w-5 bg-[#b5ff82]/60" />
+            <span className="relative grid size-8 place-items-center border border-[#9dae8c]/45 bg-[#9dae8c]/[0.08]">
+              <span className="size-2.5 rotate-45 border border-[#c9f27a]" />
+              <span className="absolute h-px w-5 bg-[#c9f27a]/65" />
             </span>
-            <span className="text-[13px] font-semibold tracking-[0.16em]">BLINDSIGHT</span>
-            <span className="hidden border-l border-white/10 pl-3 font-mono text-[10px] uppercase tracking-[0.16em] text-[#6c7b76] sm:block">
-              Private data exchange
+            <span className="text-[13px] font-semibold tracking-[0.1em]">BlindSight</span>
+            <span className="hidden border-l border-[#39463d] pl-3 text-[11px] text-[#a4afa0] sm:block">
+              Private data, useful answers
             </span>
           </a>
 
-          <div className="flex items-center gap-3 sm:gap-6">
-            <div className="hidden items-center gap-2 font-mono text-[10px] uppercase tracking-[0.1em] text-[#a4b1ab] sm:flex">
-              <span className="size-1.5 rounded-full bg-[#b5ff82] shadow-[0_0_9px_#b5ff82]" />
-              TEE gateway <span className="text-[#b5ff82]">preview</span>
+          <div className="flex items-center gap-2 sm:gap-4">
+            <div className="hidden items-center gap-2 text-[11px] text-[#a4afa0] sm:flex">
+              <span className="size-1.5 rounded-full bg-[#c9f27a]" />
+              Query gateway preview
             </div>
-            <div className="h-5 w-px bg-white/10" />
+            <div className="h-5 w-px bg-[#39463d]" />
             <div
-              className="hidden items-center gap-2 rounded-full border border-white/10 bg-[#0a1112]/90 px-2.5 py-1.5 font-mono text-[9px] uppercase tracking-[0.12em] text-[#b8c5c1] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.02)] md:flex"
-              title="Background escrow settlement & frictionless session execution powered by NEAR."
+              className="hidden items-center gap-2 border border-[#39463d] bg-[#18221c] px-2.5 py-1.5 text-[10px] text-[#b7c0b1] md:flex"
+              title="NEAR settlement is simulated in this prototype."
             >
-              <span className="size-1.5 rounded-full bg-[#7ef0a4] shadow-[0_0_8px_rgba(126,240,164,0.8)]" />
-              <span>Chain Abstraction Active</span>
+              <span className="size-1.5 rounded-full bg-[#9dae8c]" />
+              <span>NEAR testnet · preview</span>
             </div>
-            <button className="flex items-center gap-2 border border-white/10 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.1em] text-[#a4b1ab] transition hover:border-[#b5ff82]/40 hover:text-white">
-              <span className="size-1.5 rounded-full bg-[#f0b66a]" />
-              <span>NEAR Testnet</span>
-              <span className="text-[#718079]">⌄</span>
-            </button>
             {walletAccountId ? (
               <div className="flex items-center gap-2">
                 <div
-                  className="flex items-center gap-2 border border-[#b5ff82]/30 bg-[#b5ff82]/[0.06] px-2.5 py-2 font-mono text-[10px] uppercase tracking-[0.1em] text-[#dfeee4] shadow-[inset_0_0_0_1px_rgba(181,255,130,0.08)]"
+                  className="flex items-center gap-2 border border-[#9dae8c]/40 bg-[#18221c] px-2.5 py-2 text-[10px] text-[#e5e8dc]"
                   title={walletAccountId}
                 >
                   <span className="inline-flex items-center gap-2">
-                    <span className="size-1.5 rounded-full bg-[#b5ff82] shadow-[0_0_9px_#b5ff82]" />
-                    <span className="text-[#c8f1b6]">Connected as</span>
+                    <span className="size-1.5 rounded-full bg-[#c9f27a]" />
+                    <span className="text-[#a4afa0]">Wallet</span>
                   </span>
-                  <span className="max-w-[150px] truncate text-[#f2f7f1]">{walletAccountId.length > 18 ? `${walletAccountId.slice(0, 8)}...${walletAccountId.slice(-8)}` : walletAccountId}</span>
+                  <span className="max-w-[150px] truncate">{walletAccountId.length > 18 ? `${walletAccountId.slice(0, 8)}...${walletAccountId.slice(-8)}` : walletAccountId}</span>
                 </div>
                 <button
                   type="button"
                   onClick={() => void handleWalletDisconnect()}
                   disabled={isWalletLoading}
-                  className="border border-white/10 px-2 py-2 font-mono text-[9px] uppercase tracking-[0.12em] text-[#a4b1ab] transition hover:border-[#ff9a83]/35 hover:text-[#ffb5a0] disabled:cursor-wait disabled:opacity-60"
+                  className="border border-[#39463d] px-2 py-2 text-[10px] text-[#a4afa0] transition hover:border-[#c18d7d]/60 hover:text-[#e3b2a1] disabled:cursor-wait disabled:opacity-60"
                   aria-label={`Disconnect wallet ${walletAccountId}`}
                 >
                   Disconnect
@@ -569,7 +583,7 @@ export default function Home() {
                   <button
                     type="button"
                     onClick={handleExportEmbeddedWallet}
-                    className="border border-[#34d399]/25 px-2 py-2 font-mono text-[9px] uppercase tracking-[0.12em] text-[#74e7b5] transition hover:border-[#34d399]/55 hover:bg-[#34d399]/[0.06]"
+                    className="border border-[#9dae8c]/35 px-2 py-2 text-[10px] text-[#c9f27a] transition hover:border-[#c9f27a]/65 hover:bg-[#c9f27a]/[0.06]"
                     aria-label="Export embedded wallet backup key"
                   >
                     Export Key
@@ -581,9 +595,8 @@ export default function Home() {
                 type="button"
                 onClick={() => void handleWalletConnect()}
                 disabled={isWalletLoading}
-                className="flex items-center gap-2 border border-white/10 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.1em] text-[#a4b1ab] transition hover:border-[#72d9d0]/45 hover:text-white disabled:cursor-wait disabled:opacity-60"
+                className="flex items-center gap-2 border border-[#9dae8c]/55 bg-[#c9f27a] px-3 py-2 text-[11px] font-medium text-[#182018] transition hover:bg-[#d9f995] disabled:cursor-wait disabled:opacity-60"
               >
-                <span className="size-1.5 rounded-full bg-[#72d9d0] shadow-[0_0_8px_#72d9d0]" />
                 <span>{isWalletLoading ? "Connecting..." : "Connect Wallet"}</span>
               </button>
             )}
@@ -591,50 +604,57 @@ export default function Home() {
         </div>
       </header>
 
-      <main id="home" className="mx-auto max-w-[1500px] px-5 pb-10 pt-8 sm:px-8 sm:pt-11">
-        <section className="mb-8 flex flex-col justify-between gap-5 border-b border-white/[0.07] pb-7 lg:flex-row lg:items-end">
+      <main id="home" className="mx-auto max-w-[1420px] px-5 pb-12 pt-9 sm:px-8 sm:pt-12">
+        <section className="mb-9 grid gap-8 border-b border-[#39463d] pb-8 lg:grid-cols-[minmax(0,1.35fr)_minmax(260px,0.65fr)] lg:items-end">
           <div>
-            <div className="mb-3 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.2em] text-[#87958f]">
-              <span className="text-[#b5ff82]">01</span>
-              / Confidential intelligence
-            </div>
-            <h1 className="text-[clamp(30px,4vw,48px)] font-medium leading-[1.08] tracking-[-0.035em] text-[#edf3ef]">
-              Insight without exposure<span className="text-[#b5ff82]">.</span>
+            <p className="mb-4 text-[12px] text-[#a4afa0]">A private data workspace</p>
+            <h1 className="max-w-[780px] font-serif text-[clamp(42px,7vw,82px)] leading-[0.98] tracking-[-0.045em] text-[#e5e8dc]">
+              Questions out.
+              <br />
+              Files stay in<span className="text-[#c9f27a]">.</span>
             </h1>
-            <p className="mt-3 max-w-[570px] text-sm leading-6 text-[#87958f]">
-              Make private data useful. Queries route through NEAR AI Cloud; hardware isolation and attestation are mocked in this MVP.
+            <p className="mt-5 max-w-[540px] text-[14px] leading-6 text-[#a4afa0]">
+              Ask for the insight you need. Keep the source on your side.
+              <span className="mt-2 block text-[12px] text-[#839080]">
+                Prototype note: dataset text is sent to NEAR AI Cloud; enclave and settlement steps are simulated.
+              </span>
             </p>
           </div>
-          <div className="flex items-center gap-5 font-mono text-[10px] uppercase tracking-[0.1em] text-[#83918b]">
-            <div>
-              <div className="mb-1 text-[#54615c]">Settlement</div>
-              <div className="text-[#c0cbc5]">NEAR Intents</div>
-            </div>
-            <span className="h-8 w-px bg-white/10" />
-            <div>
-              <div className="mb-1 text-[#54615c]">Enclave</div>
-              <div className="flex items-center gap-2 text-[#c0cbc5]"><span className="size-1.5 rounded-full bg-[#b5ff82]" /> SGX · simulated</div>
-            </div>
+          <div aria-hidden="true" className="hidden min-h-[150px] items-end justify-end lg:flex">
+            <svg viewBox="0 0 360 150" fill="none" className="w-full max-w-[370px] text-[#9dae8c]">
+              <path d="M56 78h110m28 0h110" stroke="currentColor" strokeOpacity=".5" strokeWidth="1.5" />
+              <path d="m157 73 9 5-9 5m46-10-9 5 9 5" stroke="#c9f27a" strokeWidth="1.5" />
+              <rect x="14" y="34" width="70" height="88" rx="1" stroke="currentColor" strokeOpacity=".65" />
+              <path d="M29 56h39M29 68h31M29 80h34M29 92h23" stroke="currentColor" strokeOpacity=".65" />
+              <circle cx="180" cy="78" r="31" stroke="currentColor" strokeOpacity=".7" />
+              <circle cx="180" cy="78" r="20" stroke="#c9f27a" strokeOpacity=".75" />
+              <path d="M174 78h12m-6-6v12" stroke="#c9f27a" strokeWidth="1.4" />
+              <rect x="276" y="45" width="70" height="66" rx="1" stroke="currentColor" strokeOpacity=".65" />
+              <path d="M291 64h39m-39 12h32m-32 12h24" stroke="currentColor" strokeOpacity=".65" />
+              <text x="14" y="139" fill="currentColor" fontSize="9">SOURCE</text>
+              <text x="151" y="128" fill="currentColor" fontSize="9">PRIVATE QUERY</text>
+              <text x="276" y="128" fill="currentColor" fontSize="9">ANSWER</text>
+            </svg>
           </div>
         </section>
 
         <div className="grid gap-5 xl:grid-cols-[minmax(310px,0.78fr)_minmax(0,1.65fr)]">
-          <section className="min-w-0 border border-white/[0.09] bg-[#0d1314]">
-            <div className="flex items-center justify-between border-b border-white/[0.07] px-5 py-4">
+          <section className="min-w-0 border border-[#39463d] bg-[#18221c]">
+            <div className="flex items-center justify-between border-b border-[#39463d] px-5 py-4">
               <div className="flex items-center gap-3">
-                <span className="font-mono text-[10px] text-[#b5ff82]">01</span>
-                <h2 className="text-[13px] font-medium tracking-wide">Data Provider Vault</h2>
+                <span className="size-2 rotate-45 border border-[#c9f27a]" />
+                <h2 className="text-[14px] font-medium">Your source files</h2>
               </div>
-              <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-[#66736d]">Dataset intake · preview</span>
+              <span className="text-[10px] text-[#a4afa0]">Dataset intake</span>
             </div>
 
             <div className="p-5">
               <div className="mb-4 flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-[12px] text-[#bdc8c2]">Attach a text dataset for private analysis.</p>
-                  <p className="mt-1 text-[11px] leading-5 text-[#6f7c76]">Selected content is sent to the configured inference gateway.</p>
+                  <p className="text-[13px] text-[#d3d9cd]">Add a file to begin.</p>
+                  <p className="mt-1 text-[12px] leading-5 text-[#a4afa0]">Its extracted text is sent to the configured inference service.</p>
                 </div>
-                <span className="border border-[#f0b66a]/20 px-2 py-1 font-mono text-[9px] uppercase tracking-[0.1em] text-[#f0b66a]">LOCAL TEXT</span>
+                <span className="border border-[#9dae8c]/35 px-2 py-1 text-[10px] text-[#b7c0b1]">Text preview</span>
               </div>
 
               <input
@@ -653,7 +673,7 @@ export default function Home() {
                   if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsDragging(false);
                 }}
                 onDrop={handleDrop}
-                className={`group flex min-h-[220px] cursor-pointer flex-col items-center justify-center border border-dashed px-5 text-center transition ${isDragging ? "border-[#b5ff82] bg-[#b5ff82]/[0.07]" : "border-[#36433e] bg-[#0a0f10] hover:border-[#778b7e] hover:bg-[#0c1212]"}`}
+                className={`group flex min-h-[220px] cursor-pointer flex-col items-center justify-center border border-dashed px-5 text-center transition-colors ${isDragging ? "border-[#c9f27a] bg-[#c9f27a]/[0.06]" : "border-[#526052] bg-[#111914] hover:border-[#9dae8c] hover:bg-[#1d2921]"}`}
                 onClick={() => { if (!isEncrypting && !isValuing && !isPreparingDataset) fileInputRef.current?.click(); }}
                 role="button"
                 tabIndex={0}
@@ -664,27 +684,27 @@ export default function Home() {
                   }
                 }}
               >
-                <span className="mb-4 grid size-11 place-items-center border border-[#b5ff82]/20 bg-[#b5ff82]/[0.06] font-mono text-xl text-[#b5ff82] transition group-hover:border-[#b5ff82]/50">
+                <span className="mb-4 grid size-11 place-items-center border border-[#9dae8c]/45 bg-[#9dae8c]/[0.06] text-2xl text-[#c9f27a] transition group-hover:border-[#c9f27a]/70">
                   +
                 </span>
-                <span className="text-[12px] font-medium text-[#dce5df]">Drop files to attach</span>
-                <span className="mt-1.5 text-[11px] text-[#78857f]">or <span className="text-[#b5ff82] underline underline-offset-2">browse your device</span></span>
-                <span className="mt-5 font-mono text-[9px] uppercase tracking-[0.11em] text-[#59665f]">PDF · CSV · JSON · TXT · TSV · under 1 MB each</span>
+                <span className="text-[13px] font-medium text-[#e5e8dc]">Drop files here</span>
+                <span className="mt-1.5 text-[12px] text-[#a4afa0]">or <span className="text-[#c9f27a] underline underline-offset-2">browse your device</span></span>
+                <span className="mt-5 text-[10px] text-[#839080]">PDF, CSV, JSON, text, code, and more</span>
               </div>
 
-              <div className="mt-5 flex items-center justify-between font-mono text-[9px] uppercase tracking-[0.1em] text-[#6f7c76]">
-                <span>Vault contents</span>
-                <span>{String(files.length).padStart(2, "0")} files</span>
+              <div className="mt-5 flex items-center justify-between text-[11px] text-[#a4afa0]">
+                <span>Attached files</span>
+                <span>{files.length} {files.length === 1 ? "file" : "files"}</span>
               </div>
               {files.length > 0 ? (
                 <ul className="mt-2 divide-y divide-white/[0.06] border-y border-white/[0.07]">
                   {files.map((file, index) => (
                     <li key={`${file.name}-${index}`} className="flex items-center justify-between gap-3 py-3">
                       <div className="flex min-w-0 items-center gap-3">
-                        <span className="grid size-8 shrink-0 place-items-center border border-white/10 font-mono text-[9px] text-[#b5ff82]">{file.name.split(".").pop()?.slice(0, 4).toUpperCase()}</span>
+                        <span className="grid size-9 shrink-0 place-items-center border border-[#39463d] text-[10px] text-[#c9f27a]">{file.name.split(".").pop()?.slice(0, 4).toUpperCase()}</span>
                         <span className="min-w-0">
                           <span className="block truncate text-[11px] text-[#cbd5cf]">{file.name}</span>
-                          <span className="mt-1 block font-mono text-[9px] text-[#66736d]">{formatBytes(file.size)} · loaded locally</span>
+                          <span className="mt-1 block text-[10px] text-[#a4afa0]">{formatBytes(file.size)} · ready</span>
                         </span>
                       </div>
                       <button
@@ -699,7 +719,7 @@ export default function Home() {
                           void prepareFilesForVault(remainingFiles);
                         }}
                         disabled={isEncrypting || isValuing || isPreparingDataset}
-                        className="shrink-0 px-2 py-1 font-mono text-[9px] text-[#74817b] hover:text-[#ff9a83]"
+                        className="shrink-0 px-2 py-1 text-[10px] text-[#a4afa0] hover:text-[#e3b2a1]"
                         aria-label={`Remove ${file.name}`}
                       >
                         REMOVE
@@ -708,38 +728,37 @@ export default function Home() {
                   ))}
                 </ul>
               ) : (
-                <div className="mt-2 flex items-center gap-3 border-y border-white/[0.07] py-4">
-                  <span className="grid size-8 shrink-0 place-items-center border border-white/[0.08] font-mono text-[11px] text-[#5f6d66]">--</span>
+                <div className="mt-2 flex items-center gap-3 border-y border-[#39463d] py-4">
+                  <span className="grid size-8 shrink-0 place-items-center border border-[#39463d] text-[11px] text-[#839080]">+</span>
                   <div>
-                    <div className="text-[11px] text-[#738079]">No datasets added</div>
-                    <div className="mt-1 font-mono text-[9px] text-[#56635d]">Awaiting provider input</div>
+                    <div className="text-[12px] text-[#c4cbbf]">No files yet</div>
+                    <div className="mt-1 text-[11px] text-[#839080]">Your dataset will appear here.</div>
                   </div>
                 </div>
               )}
 
-              <div className="mt-5 flex items-center gap-2 text-[10px] leading-4 text-[#6d7a73]">
-                <span className="text-[#b5ff82]">◆</span>
-                Demo only: the ciphertext is visual metadata; the original dataset is sent for inference.
+              <div className="mt-5 border-l-2 border-[#c9f27a]/55 pl-3 text-[11px] leading-5 text-[#a4afa0]">
+                This preview does not encrypt the source. File text is sent for inference.
               </div>
               <button
                 type="button"
                 onClick={() => void handleEncryptPayload()}
                 disabled={files.length === 0 || !preparedDatasetId || isPreparingDataset || isEncrypting}
-                className="mt-5 flex h-10 w-full items-center justify-center gap-2 bg-[#b5ff82] font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-[#111711] transition hover:bg-[#c6ff9d] disabled:cursor-not-allowed disabled:bg-[#344036] disabled:text-[#7b897d]"
+                className="mt-5 flex h-11 w-full items-center justify-center gap-2 bg-[#c9f27a] text-[12px] font-semibold text-[#182018] transition hover:bg-[#d9f995] disabled:cursor-not-allowed disabled:bg-[#39463d] disabled:text-[#a4afa0]"
               >
-                <span>{isPreparingDataset ? "Validating dataset..." : isEncrypting ? "Encrypting payload locally..." : "Encrypt Payload Locally"}</span><span aria-hidden="true">{isPreparingDataset || isEncrypting ? "···" : "↗"}</span>
+                <span>{isPreparingDataset ? "Preparing dataset..." : isEncrypting ? "Preparing preview..." : "Prepare dataset"}</span><span aria-hidden="true">{isPreparingDataset || isEncrypting ? "···" : "→"}</span>
               </button>
-              <div className="mt-3 flex justify-center gap-2 font-mono text-[9px] uppercase tracking-[0.1em] text-[#56635d]">
-                <span>{isPreparingDataset ? "Checking dataset structure and building index" : vaultQueued ? "Payload ready in local preview" : "Local encryption required to query"}</span>
+              <div className="mt-3 flex justify-center gap-2 text-[10px] text-[#839080]">
+                <span>{isPreparingDataset ? "Checking the dataset structure" : vaultQueued ? "Dataset preview is ready" : "Prepare the dataset to continue"}</span>
               </div>
               {(isEncrypting || vaultQueued) && (
-                <div className="mt-4 border border-white/[0.1] bg-black p-3 font-mono text-[9px] leading-5">
+                <div className="mt-4 border border-[#39463d] bg-[#111914] p-3 text-[10px] leading-5">
                   {isEncrypting ? (
-                    <pre aria-live="polite" className="max-h-28 overflow-hidden break-all whitespace-pre-wrap text-[#b5ff82]/80">{ciphertext}</pre>
+                    <pre aria-live="polite" className="max-h-28 overflow-hidden break-all whitespace-pre-wrap text-[#c9f27a]/80">{ciphertext}</pre>
                   ) : (
                     <>
-                      <div role="status" className="text-[#b5ff82]">Payload Encrypted (AES-256). Ready for TEE Transmission.</div>
-                      <code className="mt-2 block max-h-24 overflow-auto break-all text-[#b5ff82]/70">{ciphertext}</code>
+                      <div role="status" className="text-[#c9f27a]">Encryption preview ready. No source encryption is performed.</div>
+                      <code className="mt-2 block max-h-24 overflow-auto break-all text-[#9dae8c]/80">{ciphertext}</code>
                     </>
                   )}
                 </div>
@@ -750,28 +769,28 @@ export default function Home() {
                     type="button"
                     onClick={() => void requestAgentValuation()}
                     disabled={isValuing}
-                    className="flex h-10 w-full items-center justify-center gap-2 border border-[#72d9d0]/35 bg-[#72d9d0]/[0.06] font-mono text-[10px] font-semibold uppercase tracking-[0.1em] text-[#72d9d0] transition hover:border-[#72d9d0]/65 hover:bg-[#72d9d0]/[0.1] disabled:cursor-wait disabled:opacity-60"
+                    className="flex h-10 w-full items-center justify-center gap-2 border border-[#9dae8c]/40 bg-[#9dae8c]/[0.06] text-[12px] font-medium text-[#d3d9cd] transition hover:border-[#c9f27a]/60 hover:bg-[#9dae8c]/[0.1] disabled:cursor-wait disabled:opacity-60"
                   >
                     {isValuing ? "Agent evaluating metadata..." : "Request Agent Valuation"}
                   </button>
                   {agentBid && (
-                    <div className="mt-3 border border-[#f0b66a]/30 bg-[#f0b66a]/[0.05] p-4">
+                    <div className="mt-3 border border-[#526052] bg-[#1d2921] p-4">
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
-                          <div className="font-mono text-[9px] uppercase tracking-[0.13em] text-[#f0b66a]">Autonomous Agent Bid</div>
-                          <div className="mt-1 font-mono text-[24px] font-semibold leading-8 text-[#f3c77e]">{agentBid.bidAmountInUSDC} <span className="text-[12px]">USDC</span></div>
+                          <div className="text-[11px] text-[#a4afa0]">Agent bid · demo</div>
+                          <div className="mt-1 text-[25px] font-medium leading-8 text-[#e5e8dc]">{agentBid.bidAmountInUSDC} <span className="text-[12px] text-[#a4afa0]">USDC</span></div>
                         </div>
-                        <div className="text-right font-mono text-[9px] leading-5 text-[#8f8775]">
+                        <div className="text-right text-[10px] leading-5 text-[#a4afa0]">
                           <div>{agentBid.rowCount.toLocaleString()} estimated rows</div>
                           <div>${agentBid.ratePerRowUSDC} / row</div>
                         </div>
                       </div>
-                      <p className="mt-3 text-[11px] leading-5 text-[#c5b99f]">{agentBid.justification}</p>
+                      <p className="mt-3 text-[12px] leading-5 text-[#c4cbbf]">{agentBid.justification}</p>
                       <button
                         type="button"
                         onClick={() => setAcceptedBid(agentBid)}
                         disabled={acceptedBid === agentBid}
-                        className="mt-4 flex h-9 w-full items-center justify-center gap-2 bg-[#f0b66a] px-3 font-mono text-[9px] font-semibold uppercase tracking-[0.1em] text-[#16110a] transition hover:bg-[#f5ca91] disabled:cursor-not-allowed disabled:bg-[#61503a] disabled:text-[#c7b28f]"
+                        className="mt-4 flex h-10 w-full items-center justify-center gap-2 bg-[#c9f27a] px-3 text-[12px] font-semibold text-[#182018] transition hover:bg-[#d9f995] disabled:cursor-not-allowed disabled:bg-[#39463d] disabled:text-[#a4afa0]"
                       >
                         {acceptedBid === agentBid ? "Bid Accepted · Authorized" : "Accept Bid & Authorize"}
                       </button>
@@ -799,33 +818,37 @@ export default function Home() {
             transactionHash={settlementHash}
             runCount={runCount}
             onProviderAddressChange={setProviderAddress}
+            onDismissError={() => {
+              setErrorMessage("");
+              setRateLimitAlert(false);
+            }}
             onDeposit={() => void handleDeposit()}
             onLoadSampleDataset={loadSampleDataset}
             onRunQuery={handleSubmit}
           />
         </div>
 
-        <footer className="mt-6 flex flex-col gap-3 border-t border-white/[0.07] pt-4 font-mono text-[9px] uppercase tracking-[0.1em] text-[#58665f] sm:flex-row sm:items-center sm:justify-between">
-          <span>BlindSight <span className="mx-2 text-[#35413b]">/</span> Confidential data market</span>
+        <footer className="mt-7 flex flex-col gap-3 border-t border-[#39463d] pt-4 text-[10px] text-[#839080] sm:flex-row sm:items-center sm:justify-between">
+          <span>BlindSight · Confidential data marketplace</span>
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-            <span>NEAR Intents <span className="text-[#f0b66a]">mocked</span></span>
-            <span>TEE verification <span className="text-[#f0b66a]">mocked</span></span>
-            <span>Build <span className="text-[#a1ada6]">MVP.01</span></span>
+            <span>NEAR settlement · simulated</span>
+            <span>TEE verification · simulated</span>
+            <span>Prototype build</span>
           </div>
         </footer>
       </main>
       {successMessage && settlementHash && (
-        <div role="status" className="fixed bottom-5 right-5 z-20 w-[min(420px,calc(100vw-40px))] border border-[#b5ff82]/30 bg-[#111a14] p-4 shadow-2xl shadow-black/40">
-          <div className="flex items-center gap-2 text-[11px] font-medium text-[#b5ff82]">
-            <span className="grid size-5 place-items-center border border-[#b5ff82]/30">✓</span>
+        <div role="status" className="fixed bottom-5 right-5 z-20 w-[min(420px,calc(100vw-40px))] border border-[#526052] bg-[#18221c] p-4 shadow-2xl shadow-black/40">
+          <div className="flex items-center gap-2 text-[12px] font-medium text-[#c9f27a]">
+            <span className="grid size-5 place-items-center border border-[#526052]">✓</span>
             {successMessage}
           </div>
           <code className="mt-2 block break-all font-mono text-[10px] leading-5 text-[#9ba99f]">{settlementHash}</code>
-          <span className="mt-2 block font-mono text-[9px] uppercase tracking-[0.1em] text-[#738079]">Synthetic hash · no funds moved</span>
+          <span className="mt-2 block text-[10px] text-[#a4afa0]">Synthetic hash · no funds moved</span>
           <button
             type="button"
             onClick={() => setSuccessMessage("")}
-            className="absolute right-3 top-3 px-1 font-mono text-[12px] text-[#738079] hover:text-white"
+            className="absolute right-3 top-3 px-1 text-[14px] text-[#a4afa0] hover:text-[#e5e8dc]"
             aria-label="Dismiss settlement message"
           >
             ×
@@ -835,14 +858,14 @@ export default function Home() {
       {walletError && !isConnectModalOpen && (
         <div
           role="alert"
-          className="fixed bottom-5 left-5 z-20 flex max-w-[min(420px,calc(100vw-40px))] items-start gap-4 border border-[#ff9a83]/25 bg-[#1a1111] px-4 py-3 text-xs leading-5 text-[#ffb5a0] shadow-2xl shadow-black/40"
+          className="fixed bottom-5 left-5 z-20 flex max-w-[min(420px,calc(100vw-40px))] items-start gap-4 border border-[#9e6d60]/50 bg-[#2b211e] px-4 py-3 text-xs leading-5 text-[#e3b2a1] shadow-2xl shadow-black/40"
         >
           <span>{walletError}</span>
           <button
             type="button"
             onClick={() => setWalletError(null)}
             aria-label="Dismiss wallet error"
-            className="font-mono text-sm text-[#ffb5a0]/70 hover:text-[#ffb5a0]"
+            className="text-sm text-[#e3b2a1]/70 hover:text-[#e3b2a1]"
           >
             ×
           </button>
@@ -851,7 +874,7 @@ export default function Home() {
       {walletSuccessMessage && (
         <div
           role="status"
-          className="fixed bottom-5 right-5 z-20 w-[min(460px,calc(100vw-40px))] border border-[#34d399]/35 bg-[#0d1b16] p-4 text-xs leading-5 text-[#a7f3d0] shadow-2xl shadow-black/40"
+          className="fixed bottom-5 right-5 z-20 w-[min(460px,calc(100vw-40px))] border border-[#526052] bg-[#1d2921] p-4 text-xs leading-5 text-[#d3d9cd] shadow-2xl shadow-black/40"
         >
           <div className="flex items-start justify-between gap-4">
             <span className="break-all">{walletSuccessMessage}</span>
@@ -859,7 +882,7 @@ export default function Home() {
               type="button"
               onClick={() => setWalletSuccessMessage("")}
               aria-label="Dismiss wallet created message"
-              className="shrink-0 font-mono text-sm text-[#a7f3d0]/70 hover:text-[#a7f3d0]"
+              className="shrink-0 text-sm text-[#a4afa0] hover:text-[#e5e8dc]"
             >
               ×
             </button>
@@ -877,23 +900,23 @@ export default function Home() {
             role="dialog"
             aria-modal="true"
             aria-labelledby="backup-key-title"
-            className="relative w-full max-w-[520px] border border-white/10 bg-[#0B0F17] p-5 shadow-[0_24px_100px_rgba(0,0,0,0.65)] sm:p-7"
+            className="relative w-full max-w-[520px] border border-[#526052] bg-[#18221c] p-5 shadow-[0_24px_100px_rgba(0,0,0,0.65)] sm:p-7"
           >
             <button
               type="button"
               onClick={() => setBackupKey(null)}
               aria-label="Close backup key dialog"
-              className="absolute right-4 top-4 grid size-8 place-items-center border border-white/10 text-[#98a49f] transition hover:border-white/25 hover:text-white"
+              className="absolute right-4 top-4 grid size-8 place-items-center border border-[#39463d] text-[#a4afa0] transition hover:border-[#9dae8c] hover:text-[#e5e8dc]"
             >
               ×
             </button>
-            <h2 id="backup-key-title" className="pr-10 text-xl font-medium text-white">
+            <h2 id="backup-key-title" className="pr-10 font-serif text-xl font-medium text-[#e5e8dc]">
               Export Backup Key
             </h2>
-            <p className="mt-2 text-xs leading-5 text-[#9ba9a1]">
+            <p className="mt-2 text-xs leading-5 text-[#a4afa0]">
               Import this key in another browser to access the same implicit account.
             </p>
-            <div className="mt-5 border border-[#f0b66a]/25 bg-[#f0b66a]/[0.06] p-3 text-xs leading-5 text-[#f0c98e]">
+            <div className="mt-5 border border-[#9d7356]/60 bg-[#34261d] p-3 text-xs leading-5 text-[#f0c99a]">
               Anyone with this private key can control your wallet. Store it securely and never share it.
             </div>
             <textarea
@@ -901,16 +924,16 @@ export default function Home() {
               aria-label="Embedded wallet private key"
               value={backupKey}
               onFocus={(event) => event.currentTarget.select()}
-              className="mt-4 min-h-20 w-full resize-none border border-white/10 bg-[#080c0d] p-3 font-mono text-xs leading-5 text-[#d5dfd9] outline-none focus:border-[#34d399]/40"
+              className="mt-4 min-h-20 w-full resize-none border border-[#39463d] bg-[#111914] p-3 font-mono text-xs leading-5 text-[#d3d9cd] outline-none focus:border-[#c9f27a]/60"
             />
             <div className="mt-3 flex items-center justify-between gap-3">
-              <span role="status" className="text-xs text-[#74e7b5]">
+              <span role="status" className="text-xs text-[#c9f27a]">
                 {backupKeyCopied ? "Backup key copied." : ""}
               </span>
               <button
                 type="button"
                 onClick={() => void handleCopyBackupKey()}
-                className="border border-[#34d399]/35 bg-[#34d399]/10 px-4 py-2 font-mono text-[10px] uppercase tracking-[0.1em] text-[#74e7b5] transition hover:border-[#54edb0]/70"
+                className="bg-[#c9f27a] px-4 py-2 text-[11px] font-medium text-[#182018] transition hover:bg-[#d9f995]"
               >
                 Copy key
               </button>

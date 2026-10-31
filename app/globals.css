@@ -2,8 +2,13 @@
 
 :root {
   color-scheme: dark;
-  --background: #080c0d;
-  --foreground: #e7eeeb;
+  --background: #111914;
+  --foreground: #e5e8dc;
+  --surface: #18221c;
+  --surface-raised: #1d2921;
+  --line: #39463d;
+  --muted: #a4afa0;
+  --accent: #c9f27a;
 }
 
 @theme inline {
@@ -20,6 +25,22 @@ body {
 }
 
 ::selection {
-  background: rgb(181 255 130 / 25%);
-  color: #f4fff0;
+  background: rgb(201 242 122 / 28%);
+  color: #f4f6ed;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
