@@ -11,6 +11,7 @@ import WalletWithdrawModal from "@/components/WalletWithdrawModal";
 import {
   createDeposit,
   createInstantWallet as generateEmbeddedWallet,
+  creditIncomingTransfer,
   disconnectEmbeddedWallet,
   ensureWalletLedger,
   exportPrivateKey as getEmbeddedPrivateKey,
@@ -174,6 +175,28 @@ export default function Home() {
     return { success: true, transactionId: deposit.transaction.id };
   }
 
+  function handleReceiveTransfer(senderAddress: string, amountNear: number): QuerySettlementResult {
+    if (!walletAccountId) {
+      return { success: false, message: "Connect a wallet before receiving funds." };
+    }
+
+    let credit: ReturnType<typeof creditIncomingTransfer>;
+    try {
+      credit = creditIncomingTransfer(walletAccountId, senderAddress, amountNear);
+    } catch (error) {
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : "The incoming transfer could not be saved.",
+      };
+    }
+    if (!credit) {
+      return { success: false, message: "Enter a sender address and a valid amount greater than 0." };
+    }
+
+    setWalletLedger(credit.ledger);
+    return { success: true, transactionId: credit.transaction.id };
+  }
+
   function handleWithdraw(recipient: string, amountNear: number): QuerySettlementResult {
     if (!walletAccountId) {
       return { success: false, message: "Connect a wallet before sending funds." };
@@ -328,6 +351,7 @@ export default function Home() {
                 ledger={walletLedger}
                 variant="header"
                 onBalanceClick={() => handleOpenWalletAction("withdraw")}
+                onReceiveClick={() => handleOpenWalletAction("deposit")}
                 onFaucetClick={() => { handleDeposit(1); }}
                 onDepositClick={() => handleOpenWalletAction("deposit")}
                 onWithdrawClick={() => handleOpenWalletAction("withdraw")}
@@ -444,6 +468,7 @@ export default function Home() {
           ledger={walletLedger}
           onClose={() => setWalletModal(null)}
           onDeposit={handleDeposit}
+          onReceiveTransfer={handleReceiveTransfer}
         />
       )}
       {walletModal === "withdraw" && walletLedger && (

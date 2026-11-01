@@ -7,6 +7,7 @@ type WalletSummaryProps = {
   ledger: WalletLedger | null;
   variant?: "header" | "panel";
   onDepositClick?: () => void;
+  onReceiveClick?: () => void;
   onWithdrawClick?: () => void;
   onBalanceClick?: () => void;
   onFaucetClick?: () => void;
@@ -69,6 +70,7 @@ export default function WalletSummary({
   ledger,
   variant = "panel",
   onDepositClick,
+  onReceiveClick,
   onWithdrawClick,
   onBalanceClick,
   onFaucetClick,
@@ -152,6 +154,16 @@ export default function WalletSummary({
             </span>
           )}
         </div>
+        {onReceiveClick && (
+          <button
+            type="button"
+            onClick={() => { setMenuOpen(false); onReceiveClick(); }}
+            aria-label="Receive / Deposit NEAR"
+            className="h-8 whitespace-nowrap border border-emerald-500/25 bg-[#0B0F17]/80 px-2 text-[9px] font-medium text-[#A7B9B0] transition hover:border-emerald-500/50 hover:text-[#34D399] sm:px-2.5 sm:text-[10px]"
+          >
+            Receive
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setMenuOpen((current) => !current)}
@@ -185,7 +197,7 @@ export default function WalletSummary({
               disabled={!onDepositClick}
               className="w-full px-3 py-2.5 text-left text-[11px] text-[#E2F8EC] transition hover:bg-emerald-950/50 disabled:opacity-50"
             >
-              📥 Deposit NEAR
+              📥 Receive / Deposit
             </button>
             <button
               type="button"

@@ -7,14 +7,22 @@ type WalletDepositModalProps = {
   ledger: WalletLedger;
   onClose: () => void;
   onDeposit: (amountNear: number) => QuerySettlementResult;
+  onReceiveTransfer: (senderAddress: string, amountNear: number) => QuerySettlementResult;
 };
 
 const FAUCET_TOP_UP_NEAR = 1;
 
-export default function WalletDepositModal({ ledger, onClose, onDeposit }: WalletDepositModalProps) {
+export default function WalletDepositModal({
+  ledger,
+  onClose,
+  onDeposit,
+  onReceiveTransfer,
+}: WalletDepositModalProps) {
   const [copied, setCopied] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [senderAddress, setSenderAddress] = useState("Bs-00000000000000000000.near");
+  const [amount, setAmount] = useState("3.00");
   const timeoutRef = useRef<number | null>(null);
 
   useEffect(() => () => {
@@ -46,6 +54,29 @@ export default function WalletDepositModal({ ledger, onClose, onDeposit }: Walle
     setNotice(`Added ${formatNearAmount(FAUCET_TOP_UP_NEAR)} to your balance.`);
   }
 
+  function handleReceiveTransfer() {
+    const amountNear = Number(amount);
+    if (!senderAddress.trim()) {
+      setError("Enter the sender address.");
+      setNotice("");
+      return;
+    }
+    if (!Number.isFinite(amountNear) || amountNear <= 0) {
+      setError("Enter an amount greater than 0.");
+      setNotice("");
+      return;
+    }
+
+    const result = onReceiveTransfer(senderAddress.trim(), amountNear);
+    if (!result.success) {
+      setError(result.message ?? "The incoming transfer could not be credited.");
+      setNotice("");
+      return;
+    }
+    setError("");
+    setNotice(`Received ${formatNearAmount(amountNear)} from ${senderAddress.trim()}.`);
+  }
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-md"
@@ -57,7 +88,7 @@ export default function WalletDepositModal({ ledger, onClose, onDeposit }: Walle
         role="dialog"
         aria-modal="true"
         aria-labelledby="deposit-near-title"
-        className="relative w-full max-w-[460px] rounded-xl border border-emerald-500/20 bg-[#0B0F17]/95 p-5 shadow-[0_24px_100px_rgba(0,0,0,0.65)] sm:p-6"
+        className="relative max-h-[90vh] w-full max-w-[520px] overflow-y-auto rounded-xl border border-emerald-500/20 bg-[#0B0F17]/95 p-5 shadow-[0_24px_100px_rgba(0,0,0,0.65)] sm:p-6"
       >
         <button
           type="button"
@@ -68,10 +99,10 @@ export default function WalletDepositModal({ ledger, onClose, onDeposit }: Walle
           ×
         </button>
         <h2 id="deposit-near-title" className="pr-10 font-serif text-xl font-medium text-[#F0FDF4]">
-          Deposit NEAR
+          Receive / Deposit NEAR
         </h2>
         <p className="mt-2 text-xs leading-5 text-[#A7B9B0]">
-          Top up your testnet balance to keep querying private vaults.
+          Receive NEAR to your active wallet. The simulator below adds a local demo credit; it does not submit a blockchain transaction.
         </p>
 
         <div className="mt-5 border border-emerald-500/20 bg-[#0B0F17]/70 p-3">
@@ -94,12 +125,48 @@ export default function WalletDepositModal({ ledger, onClose, onDeposit }: Walle
           <span className="font-mono text-[14px] text-[#F0FDF4]">{formatNearAmount(ledger.balanceNear)}</span>
         </div>
 
+        <section className="mt-4 border border-emerald-500/20 bg-[#0B0F17]/70 p-3">
+          <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#D1FAE5]">
+            Incoming Transfer Simulator
+          </h3>
+          <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_120px]">
+            <label className="min-w-0 text-[9px] uppercase tracking-[0.1em] text-[#7D9187]">
+              Sender Address
+              <input
+                type="text"
+                value={senderAddress}
+                onChange={(event) => setSenderAddress(event.target.value)}
+                placeholder="Bs-<20 hex>.near"
+                className="mt-1.5 h-9 w-full border border-emerald-500/20 bg-[#060A10] px-2 text-[11px] normal-case tracking-normal text-[#E2F8EC] outline-none focus:border-emerald-500/50"
+              />
+            </label>
+            <label className="text-[9px] uppercase tracking-[0.1em] text-[#7D9187]">
+              Amount (NEAR)
+              <input
+                type="number"
+                min="0.01"
+                step="0.01"
+                value={amount}
+                onChange={(event) => setAmount(event.target.value)}
+                className="mt-1.5 h-9 w-full border border-emerald-500/20 bg-[#060A10] px-2 font-mono text-[11px] text-[#E2F8EC] outline-none focus:border-emerald-500/50"
+              />
+            </label>
+          </div>
+          <button
+            type="button"
+            onClick={handleReceiveTransfer}
+            className="mt-3 flex min-h-11 w-full items-center justify-center bg-emerald-500 px-3 py-2 text-[11px] font-semibold text-slate-950 shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-400"
+          >
+            Deposit {formatNearAmount(Number(amount) || 0)} to This Account
+          </button>
+        </section>
+
         <button
           type="button"
           onClick={handleTopUp}
-          className="mt-4 flex h-11 w-full items-center justify-center gap-2 bg-emerald-500 text-[12px] font-semibold text-slate-950 shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-400"
+          className="mt-3 flex h-10 w-full items-center justify-center gap-2 border border-emerald-500/25 bg-emerald-950/30 text-[10px] font-semibold text-[#34D399] transition hover:border-emerald-500/50 hover:bg-emerald-950/50"
         >
-          Top-Up +1.0 NEAR (Faucet)
+          Testnet Faucet · Add +1.0 NEAR
         </button>
 
         {notice && (

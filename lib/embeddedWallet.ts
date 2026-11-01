@@ -480,6 +480,56 @@ export function createDeposit(
   };
 }
 
+export function creditIncomingTransfer(
+  recipientAddress: string,
+  senderAddress: string,
+  amountNear: number,
+): { ledger: WalletLedger; transaction: WalletTransaction } | null {
+  if (typeof window === "undefined") return null;
+
+  const recipient = recipientAddress.trim();
+  const sender = senderAddress.trim();
+  const amount = roundNear(amountNear);
+  if (!recipient || !sender || !Number.isFinite(amount) || amount <= 0) return null;
+
+  const walletsDb = loadWalletsDb();
+  const recipientKey = normalizeAccountAddress(recipient);
+  const currentLedger = walletsDb[recipientKey] ?? createWalletLedger(recipient);
+  const transaction: WalletTransaction = {
+    id: `tx-deposit-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    type: "DEPOSIT_CREDIT",
+    amount: `+${amount.toFixed(2)} NEAR`,
+    description: `+${amount.toFixed(2)} NEAR received from ${sender}`,
+    recipient: sender,
+    status: "SUCCESS",
+    timestamp: new Date().toLocaleTimeString(),
+  };
+  const ledger: WalletLedger = {
+    ...currentLedger,
+    accountId: currentLedger.accountId || recipient,
+    address: currentLedger.address || formatNearAddress(recipient),
+    balanceNear: roundNear(currentLedger.balanceNear + amount),
+    transactions: [transaction, ...currentLedger.transactions],
+  };
+
+  walletsDb[recipientKey] = ledger;
+  saveWalletsDb(walletsDb, true);
+  if (!loadWalletsDb()[recipientKey]?.transactions.some((entry) => entry.id === transaction.id)) {
+    throw new Error("Could not save the incoming transfer to the wallet ledger.");
+  }
+  persistWalletLedgerSnapshot(ledger);
+  window.dispatchEvent(new CustomEvent(WALLET_SYNC_EVENT, {
+    detail: {
+      fromAddr: sender,
+      toAddr: recipient,
+      amount,
+      transactionId: transaction.id,
+    },
+  }));
+
+  return { ledger, transaction };
+}
+
 type TransferTransactionFactory = (context: {
   amount: number;
   fromAddress: string;

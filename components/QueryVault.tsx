@@ -14,6 +14,7 @@ import {
   INITIAL_TEST_BALANCE_NEAR,
   WALLET_DEPOSIT_EVENT,
   WALLET_SYNC_EVENT,
+  WALLETS_DB_STORAGE_KEY,
   formatNearAmount,
   loadAccountsLedger,
   normalizeAccountAddress,
@@ -23,6 +24,7 @@ import {
   type AccountsLedger,
   type QuerySettlementResult,
   type WalletLedger,
+  type WalletTransaction,
 } from "@/lib/embeddedWallet";
 
 type QueryVaultProps = {
@@ -261,6 +263,9 @@ export default function QueryVault({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const timeoutRef = useRef<number | null>(null);
   const runIdRef = useRef(0);
+  const observedAccountRef = useRef("");
+  const observedBalanceRef = useRef<number | null>(null);
+  const observedTransactionIdsRef = useRef(new Set<string>());
 
   const showNotification = useCallback((message: string) => {
     setNotification(message);
@@ -298,32 +303,114 @@ export default function QueryVault({
   }, [walletLedger]);
 
   useEffect(() => {
+    if (!walletLedger) {
+      observedAccountRef.current = "";
+      observedBalanceRef.current = null;
+      observedTransactionIdsRef.current.clear();
+      return;
+    }
+
+    const accountKey = normalizeAccountAddress(walletLedger.accountId);
+    if (observedAccountRef.current !== accountKey) {
+      observedAccountRef.current = accountKey;
+      observedTransactionIdsRef.current = new Set(
+        walletLedger.transactions.map((transaction) => transaction.id),
+      );
+    } else {
+      for (const transaction of walletLedger.transactions) {
+        observedTransactionIdsRef.current.add(transaction.id);
+      }
+    }
+    observedBalanceRef.current = walletLedger.balanceNear;
+  }, [walletLedger]);
+
+  useEffect(() => {
     const refreshAccounts = () => setAccountsLedger(loadAccountsLedger());
     window.addEventListener(ACCOUNTS_LEDGER_EVENT, refreshAccounts);
     return () => window.removeEventListener(ACCOUNTS_LEDGER_EVENT, refreshAccounts);
   }, []);
 
   useEffect(() => {
-    const handleWalletSync = (event: Event) => {
-      const walletsDb = loadAccountsLedger();
-      setAccountsLedger(walletsDb);
+    const activeAccountId = walletLedger?.accountId;
+    if (!activeAccountId) return;
+    const accountKey = normalizeAccountAddress(activeAccountId);
 
-      const detail = (event as CustomEvent<{ fromAddr?: string; toAddr?: string }>).detail;
-      if (!detail?.toAddr) {
-        showNotification("Transfer complete.");
+    const handleWalletUpdate = (event: Event) => {
+      const detail = event.type === WALLET_SYNC_EVENT
+        ? (event as CustomEvent<{ fromAddr?: unknown; toAddr?: unknown }>).detail
+        : undefined;
+      if (typeof detail?.toAddr === "string" && normalizeAccountAddress(detail.toAddr) !== accountKey) {
+        setAccountsLedger(loadAccountsLedger());
         return;
       }
 
-      const recipient = walletsDb[normalizeAccountAddress(detail.toAddr)];
-      const credit = recipient?.transactions.find((transaction) => transaction.type === "DEPOSIT_CREDIT");
-      showNotification(
-        credit
-          ? `Transfer complete · ${credit.amount} received by ${detail.toAddr}`
-          : `Transfer complete · ${detail.toAddr} credited.`,
+      const storedDb = window.localStorage.getItem(WALLETS_DB_STORAGE_KEY);
+      if (!storedDb) {
+        setAccountsLedger(loadAccountsLedger());
+        return;
+      }
+
+      let parsedDb: unknown;
+      try {
+        parsedDb = JSON.parse(storedDb);
+      } catch (error) {
+        console.error("Could not parse the updated wallet ledger.", error);
+        return;
+      }
+      if (typeof parsedDb !== "object" || parsedDb === null || Array.isArray(parsedDb)) {
+        setAccountsLedger(loadAccountsLedger());
+        return;
+      }
+
+      const walletsDb = parsedDb as Record<string, unknown>;
+      const storedLedger = walletsDb[accountKey];
+      if (typeof storedLedger !== "object" || storedLedger === null || Array.isArray(storedLedger)) {
+        setAccountsLedger(loadAccountsLedger());
+        return;
+      }
+
+      const ledgerRecord = storedLedger as {
+        balanceNear?: unknown;
+        balance?: unknown;
+        transactions?: unknown;
+      };
+      const nextBalance = Number(ledgerRecord.balanceNear ?? ledgerRecord.balance);
+      if (!Number.isFinite(nextBalance)) {
+        setAccountsLedger(loadAccountsLedger());
+        return;
+      }
+
+      const transactions = Array.isArray(ledgerRecord.transactions)
+        ? ledgerRecord.transactions.filter((transaction): transaction is WalletTransaction => {
+          if (typeof transaction !== "object" || transaction === null) return false;
+          const candidate = transaction as Partial<WalletTransaction>;
+          return typeof candidate.id === "string" && typeof candidate.type === "string";
+        })
+        : [];
+      const newCredit = transactions.find((transaction) =>
+        transaction.type === "DEPOSIT_CREDIT" &&
+        !observedTransactionIdsRef.current.has(transaction.id),
       );
+      const previousBalance = observedBalanceRef.current ?? 0;
+      const receivedAmount = roundNear(nextBalance - previousBalance);
+
+      setAccountsLedger(parsedDb as AccountsLedger);
+      for (const transaction of transactions) {
+        observedTransactionIdsRef.current.add(transaction.id);
+      }
+      observedBalanceRef.current = nextBalance;
+
+      if (receivedAmount <= 0) return;
+      const sender = typeof detail?.fromAddr === "string"
+        ? detail.fromAddr
+        : newCredit?.recipient ??
+          newCredit?.description.match(/received from (.+)$/i)?.[1] ??
+          "unknown sender";
+      showNotification(`Received +${receivedAmount.toFixed(2)} NEAR · Credited from ${sender}`);
     };
 
     const handleDeposit = (event: Event) => {
+      setAccountsLedger(loadAccountsLedger());
       const detail = (event as CustomEvent<{ amount?: number }>).detail;
       showNotification(
         typeof detail?.amount === "number"
@@ -332,13 +419,21 @@ export default function QueryVault({
       );
     };
 
-    window.addEventListener(WALLET_SYNC_EVENT, handleWalletSync);
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === WALLETS_DB_STORAGE_KEY || event.key === null) {
+        handleWalletUpdate(event);
+      }
+    };
+
+    window.addEventListener(WALLET_SYNC_EVENT, handleWalletUpdate);
+    window.addEventListener("storage", handleStorage);
     window.addEventListener(WALLET_DEPOSIT_EVENT, handleDeposit);
     return () => {
-      window.removeEventListener(WALLET_SYNC_EVENT, handleWalletSync);
+      window.removeEventListener(WALLET_SYNC_EVENT, handleWalletUpdate);
+      window.removeEventListener("storage", handleStorage);
       window.removeEventListener(WALLET_DEPOSIT_EVENT, handleDeposit);
     };
-  }, [showNotification]);
+  }, [walletLedger, showNotification]);
 
   const selectedVault = vaults.find((vault) => vault.id === selectedVaultId) ?? vaults[0];
   const publisherKey = (providerAddress.trim() || "you.near").toLowerCase();
