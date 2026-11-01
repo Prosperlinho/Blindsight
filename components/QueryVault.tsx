@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -8,10 +9,11 @@ import {
   type DragEvent,
   type FormEvent,
 } from "react";
-import WalletSummary from "@/components/WalletSummary";
 import {
   ACCOUNTS_LEDGER_EVENT,
   INITIAL_TEST_BALANCE_NEAR,
+  WALLET_DEPOSIT_EVENT,
+  WALLET_SYNC_EVENT,
   formatNearAmount,
   loadAccountsLedger,
   normalizeAccountAddress,
@@ -28,8 +30,6 @@ type QueryVaultProps = {
   onProviderAddressChange: (address: string) => void;
   walletLedger: WalletLedger | null;
   onSettleQuery: (priceNear: number, vaultTitle: string, publisherAddress: string) => QuerySettlementResult;
-  onOpenDeposit: () => void;
-  onOpenWithdraw: () => void;
 };
 
 type ViewTab = "explorer" | "publisher";
@@ -240,8 +240,6 @@ export default function QueryVault({
   onProviderAddressChange,
   walletLedger,
   onSettleQuery,
-  onOpenDeposit,
-  onOpenWithdraw,
 }: QueryVaultProps) {
   const [activeTab, setActiveTab] = useState<ViewTab>("explorer");
   const [vaults, setVaults] = useState<MarketplaceVault[]>(INITIAL_VAULTS);
@@ -249,11 +247,9 @@ export default function QueryVault({
   const [query, setQuery] = useState("");
   const [isExecuting, setIsExecuting] = useState(false);
   const [answer, setAnswer] = useState<VaultAnswer | null>(null);
-  const [explorerNotice, setExplorerNotice] = useState("");
-  const [settlementError, setSettlementError] = useState("");
-  const [publisherNotice, setPublisherNotice] = useState("");
   const [auditLog, setAuditLog] = useState<AuditLogEntry[]>([]);
   const [accountsLedger, setAccountsLedger] = useState<AccountsLedger>({});
+  const [notification, setNotification] = useState<string | null>(null);
 
   const [draftFiles, setDraftFiles] = useState<DraftFile[]>([]);
   const [draftTitle, setDraftTitle] = useState("");
@@ -266,9 +262,19 @@ export default function QueryVault({
   const timeoutRef = useRef<number | null>(null);
   const runIdRef = useRef(0);
 
+  const showNotification = useCallback((message: string) => {
+    setNotification(message);
+  }, []);
+
   useEffect(() => () => {
     if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
   }, []);
+
+  useEffect(() => {
+    if (!notification) return;
+    const timer = window.setTimeout(() => setNotification(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [notification]);
 
   useEffect(() => {
     const accounts = loadAccountsLedger();
@@ -297,6 +303,43 @@ export default function QueryVault({
     return () => window.removeEventListener(ACCOUNTS_LEDGER_EVENT, refreshAccounts);
   }, []);
 
+  useEffect(() => {
+    const handleWalletSync = (event: Event) => {
+      const walletsDb = loadAccountsLedger();
+      setAccountsLedger(walletsDb);
+
+      const detail = (event as CustomEvent<{ fromAddr?: string; toAddr?: string }>).detail;
+      if (!detail?.toAddr) {
+        showNotification("Transfer complete.");
+        return;
+      }
+
+      const recipient = walletsDb[normalizeAccountAddress(detail.toAddr)];
+      const credit = recipient?.transactions.find((transaction) => transaction.type === "DEPOSIT_CREDIT");
+      showNotification(
+        credit
+          ? `Transfer complete · ${credit.amount} received by ${detail.toAddr}`
+          : `Transfer complete · ${detail.toAddr} credited.`,
+      );
+    };
+
+    const handleDeposit = (event: Event) => {
+      const detail = (event as CustomEvent<{ amount?: number }>).detail;
+      showNotification(
+        typeof detail?.amount === "number"
+          ? `Deposit complete · ${formatNearAmount(detail.amount)} added to your wallet.`
+          : "Deposit complete.",
+      );
+    };
+
+    window.addEventListener(WALLET_SYNC_EVENT, handleWalletSync);
+    window.addEventListener(WALLET_DEPOSIT_EVENT, handleDeposit);
+    return () => {
+      window.removeEventListener(WALLET_SYNC_EVENT, handleWalletSync);
+      window.removeEventListener(WALLET_DEPOSIT_EVENT, handleDeposit);
+    };
+  }, [showNotification]);
+
   const selectedVault = vaults.find((vault) => vault.id === selectedVaultId) ?? vaults[0];
   const publisherKey = (providerAddress.trim() || "you.near").toLowerCase();
   const myVaults = vaults.filter((vault) => vault.seller.trim().toLowerCase() === publisherKey);
@@ -323,8 +366,6 @@ export default function QueryVault({
     setQuery("");
     setAnswer(null);
     setIsExecuting(false);
-    setExplorerNotice("");
-    setSettlementError("");
   }
 
   function handleRunQuery(event: FormEvent<HTMLFormElement>) {
@@ -336,7 +377,7 @@ export default function QueryVault({
     const priceNear = Number(vault.priceNear);
     const settlement = onSettleQuery(priceNear, vault.title, vault.seller);
     if (!settlement.success) {
-      setSettlementError(settlement.message ?? "The query could not be settled. Check your wallet balance.");
+      showNotification(settlement.message ?? "The query could not be settled. Check your wallet balance.");
       return;
     }
 
@@ -344,8 +385,6 @@ export default function QueryVault({
     runIdRef.current = runId;
     setIsExecuting(true);
     setAnswer(null);
-    setExplorerNotice("");
-    setSettlementError("");
 
     if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
     timeoutRef.current = window.setTimeout(() => {
@@ -375,7 +414,7 @@ export default function QueryVault({
       },
       ...current,
     ]);
-    setPublisherNotice(`"${vault.title}" was removed. Buyers can no longer query it.`);
+    showNotification(`"${vault.title}" was removed. Buyers can no longer query it.`);
 
     if (selectedVaultId === vaultId) {
       if (timeoutRef.current !== null) {
@@ -387,7 +426,6 @@ export default function QueryVault({
       setQuery("");
       setAnswer(null);
       setIsExecuting(false);
-      setSettlementError("");
     }
   }
 
@@ -426,7 +464,8 @@ export default function QueryVault({
 
     if (accepted.length) {
       setDraftFiles((current) => [...current, ...accepted]);
-      setDraftNotice(`${accepted.length} file${accepted.length === 1 ? "" : "s"} ready to publish.`);
+      showNotification(`${accepted.length} file${accepted.length === 1 ? "" : "s"} ready to publish.`);
+      setDraftNotice("");
     } else {
       setDraftNotice("");
     }
@@ -482,7 +521,7 @@ export default function QueryVault({
     setAnswer(null);
     setIsExecuting(false);
     setActiveTab("explorer");
-    setExplorerNotice(`"${title}" is live in the local TEE marketplace.`);
+    showNotification(`"${title}" is live in the local TEE marketplace.`);
     setDraftFiles([]);
     setDraftTitle("");
     setDraftDescription("");
@@ -491,6 +530,7 @@ export default function QueryVault({
   }
 
   return (
+    <>
     <section className="flex min-w-0 flex-col overflow-hidden border border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl transition-colors hover:border-emerald-500/40">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-emerald-500/20 px-4 py-4 sm:px-5">
         <div className="flex items-center gap-3">
@@ -553,38 +593,9 @@ export default function QueryVault({
             aria-labelledby="explorer-tab"
             className="space-y-4"
           >
-            <WalletSummary
-              ledger={walletLedger}
-              onDepositClick={onOpenDeposit}
-              onWithdrawClick={onOpenWithdraw}
-            />
-
-            {settlementError && (
-              <div
-                role="alert"
-                className="flex items-start justify-between gap-3 border border-[#FCA5A5]/25 bg-[#261719] px-3 py-2 text-[11px] leading-5 text-[#FCA5A5]"
-              >
-                <span>{settlementError}</span>
-                <button
-                  type="button"
-                  onClick={() => setSettlementError("")}
-                  aria-label="Dismiss settlement error"
-                  className="shrink-0 text-sm text-[#FCA5A5]/70 transition hover:text-[#FCA5A5]"
-                >
-                  ×
-                </button>
-              </div>
-            )}
-
-            {explorerNotice && (
-              <div role="status" className="border border-emerald-500/20 bg-emerald-950/40 px-3 py-2 text-[11px] text-[#D1FAE5]">
-                {explorerNotice}
-              </div>
-            )}
-
             <div className="flex flex-wrap items-end justify-between gap-3">
               <div>
-                <h3 className="text-[12px] font-medium text-[#E2F8EC]">Active TEE vaults</h3>
+                <h3 className="text-[12px] font-medium text-[#E2F8EC]">Active Enclave Vaults</h3>
                 <p className="mt-1 text-[11px] leading-5 text-[#A7B9B0]">
                   Select a vault to query it instantly. No file upload required.
                 </p>
@@ -652,8 +663,8 @@ export default function QueryVault({
             <div className="border border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-emerald-500/20 px-4 py-3">
                 <div className="min-w-0">
-                  <div className="text-[10px] text-[#A7B9B0]">Selected vault</div>
-                  <div className="mt-1 truncate text-[13px] font-medium text-[#F0FDF4]">{selectedVault.title}</div>
+                  <h3 className="text-[11px] font-medium text-[#E2F8EC]">Attested Query Console</h3>
+                  <div className="mt-1 truncate text-[10px] text-[#A7B9B0]">Selected vault · {selectedVault.title}</div>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="border border-emerald-500/20 bg-[#0B0F17]/60 px-2 py-1 font-mono text-[10px] text-[#34D399]">
@@ -786,12 +797,6 @@ export default function QueryVault({
             {draftNotice && (
               <div role="status" className="border border-emerald-500/20 bg-emerald-950/40 px-3 py-2 text-[11px] text-[#D1FAE5]">
                 {draftNotice}
-              </div>
-            )}
-
-            {publisherNotice && (
-              <div role="status" className="border border-[#FCA5A5]/25 bg-[#261719] px-3 py-2 text-[11px] text-[#FCA5A5]">
-                {publisherNotice}
               </div>
             )}
 
@@ -999,5 +1004,14 @@ export default function QueryVault({
         )}
       </div>
     </section>
+    {notification && (
+      <div
+        role="status"
+        className="fixed bottom-5 right-5 z-50 max-w-[min(460px,calc(100vw-40px))] border border-emerald-500/25 bg-emerald-950/95 px-4 py-3 text-xs leading-5 text-[#D1FAE5] shadow-2xl shadow-black/40"
+      >
+        {notification}
+      </div>
+    )}
+    </>
   );
 }

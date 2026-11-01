@@ -3,7 +3,10 @@ import { KeyPair, keyToImplicitAddress, type KeyPairString } from "near-api-js";
 const PRIVATE_KEY_STORAGE_KEY = "blindsight_private_key";
 const ACCOUNT_ID_STORAGE_KEY = "blindsight_account_id";
 const ACCOUNTS_LEDGER_STORAGE_KEY = "blindsight_accounts_ledger";
+export const WALLETS_DB_STORAGE_KEY = "blindsight_wallets_db";
 export const ACCOUNTS_LEDGER_EVENT = "blindsight:accounts-ledger-updated";
+export const WALLET_SYNC_EVENT = "blindsight_wallet_sync";
+export const WALLET_DEPOSIT_EVENT = "blindsight_wallet_deposit";
 
 export type EmbeddedWallet = {
   accountId: string;
@@ -185,23 +188,23 @@ export function getAccountBalance(accounts: AccountsLedger, address: string): nu
   return getAccountLedger(accounts, address)?.balanceNear ?? 0;
 }
 
-export function loadAccountsLedger(): AccountsLedger {
-  if (typeof window === "undefined") {
-    return {};
-  }
+function parseAccountsLedger(rawLedger: string | null): AccountsLedger {
+  if (!rawLedger) return {};
 
   try {
-    const rawLedger = window.localStorage.getItem(ACCOUNTS_LEDGER_STORAGE_KEY);
-    if (!rawLedger) return {};
-
     const parsed = JSON.parse(rawLedger) as unknown;
     if (!parsed || typeof parsed !== "object") return {};
 
     const accounts: AccountsLedger = {};
     for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
       if (!value || typeof value !== "object") continue;
-      const ledger = value as Partial<WalletLedger>;
-      if (typeof ledger.accountId !== "string" || typeof ledger.balanceNear !== "number") continue;
+      const ledger = value as Partial<WalletLedger> & { balance?: unknown };
+      const balanceNear = typeof ledger.balanceNear === "number"
+        ? ledger.balanceNear
+        : typeof ledger.balance === "number"
+          ? ledger.balance
+          : null;
+      if (typeof ledger.accountId !== "string" || balanceNear === null) continue;
       const normalizedKey = normalizeAccountAddress(key);
       if (!normalizedKey) continue;
       accounts[normalizedKey] = {
@@ -209,7 +212,7 @@ export function loadAccountsLedger(): AccountsLedger {
         address: typeof ledger.address === "string" && ledger.address
           ? ledger.address
           : formatNearAddress(ledger.accountId),
-        balanceNear: Math.max(0, roundNear(ledger.balanceNear)),
+        balanceNear: Math.max(0, roundNear(balanceNear)),
         transactions: Array.isArray(ledger.transactions)
           ? ledger.transactions.filter(isWalletTransaction)
           : [],
@@ -221,20 +224,60 @@ export function loadAccountsLedger(): AccountsLedger {
   }
 }
 
-export function saveAccountsLedger(accounts: AccountsLedger, notify = false): void {
+export function loadWalletsDb(): AccountsLedger {
+  if (typeof window === "undefined") {
+    return {};
+  }
+
+  try {
+    const rawDb = window.localStorage.getItem(WALLETS_DB_STORAGE_KEY);
+    if (rawDb) return parseAccountsLedger(rawDb);
+
+    // Migrate wallets stored under the previous ledger key on first read.
+    const legacyLedger = parseAccountsLedger(window.localStorage.getItem(ACCOUNTS_LEDGER_STORAGE_KEY));
+    if (Object.keys(legacyLedger).length > 0) {
+      saveWalletsDb(legacyLedger);
+    }
+    return legacyLedger;
+  } catch {
+    return {};
+  }
+}
+
+export function saveWalletsDb(accounts: AccountsLedger, notify = false): void {
   if (typeof window === "undefined") {
     return;
+  }
+
+  // Persist both balanceNear and balance so every consumer of the wallet DB agrees.
+  const serialized: Record<string, WalletLedger & { balance: number }> = {};
+  for (const [key, ledger] of Object.entries(accounts)) {
+    serialized[key] = { ...ledger, balance: ledger.balanceNear };
+  }
+
+  try {
+    window.localStorage.setItem(WALLETS_DB_STORAGE_KEY, JSON.stringify(serialized));
+  } catch {
+    // The in-memory React state remains authoritative if storage is unavailable.
   }
 
   try {
     window.localStorage.setItem(ACCOUNTS_LEDGER_STORAGE_KEY, JSON.stringify(accounts));
   } catch {
-    // The in-memory React state remains authoritative if storage is unavailable.
+    // Keep the wallets DB as the source of truth if the legacy key cannot be written.
   }
 
   if (notify) {
     window.dispatchEvent(new Event(ACCOUNTS_LEDGER_EVENT));
   }
+}
+
+export function loadAccountsLedger(): AccountsLedger {
+  return loadWalletsDb();
+}
+
+export function saveAccountsLedger(accounts: AccountsLedger, notify = false): void {
+  saveWalletsDb(accounts, notify);
 }
 
 export function seedAccountEarnings(
@@ -407,6 +450,12 @@ export function createDeposit(
     timestamp: "Just now",
   };
 
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(WALLET_DEPOSIT_EVENT, {
+      detail: { accountId: ledger.accountId, amount },
+    }));
+  }
+
   return {
     transaction,
     ledger: {
@@ -419,8 +468,8 @@ export function createDeposit(
 
 type TransferTransactionFactory = (context: {
   amount: number;
-  senderDisplay: string;
-  recipientDisplay: string;
+  fromAddress: string;
+  toAddress: string;
 }) => { sender: WalletTransaction; recipient: WalletTransaction };
 
 function persistWalletLedgerSnapshot(ledger: WalletLedger): void {
@@ -428,59 +477,65 @@ function persistWalletLedgerSnapshot(ledger: WalletLedger): void {
   try {
     window.localStorage.setItem(ledgerStorageKey(ledger.accountId), JSON.stringify(ledger));
   } catch {
-    // The global accounts ledger remains the source of truth if storage is unavailable.
+    // The wallets DB remains the source of truth if storage is unavailable.
   }
 }
 
-function executeAccountTransfer(
-  senderLedger: WalletLedger,
-  recipientAddress: string,
+function executeTransfer(
+  fromAddress: string,
+  toAddress: string,
   amountNear: number,
   createTransactions: TransferTransactionFactory,
+  notifySync: boolean,
 ): NearTransferReceipt | null {
   if (typeof window === "undefined") return null;
 
   const amount = roundNear(amountNear);
-  const destination = recipientAddress.trim();
-  if (!destination || !Number.isFinite(amount) || amount <= 0) return null;
+  const from = fromAddress.trim();
+  const to = toAddress.trim();
+  if (!from || !to || !Number.isFinite(amount) || amount <= 0) return null;
 
-  const senderKey = normalizeAccountAddress(senderLedger.accountId);
-  const recipientKey = normalizeAccountAddress(destination);
+  const senderKey = normalizeAccountAddress(from);
+  const recipientKey = normalizeAccountAddress(to);
   if (!senderKey || !recipientKey || senderKey === recipientKey) return null;
 
-  const accounts = loadAccountsLedger();
-  const senderBase = accounts[senderKey] ?? senderLedger;
+  const walletsDb = loadWalletsDb();
+  const senderBase = walletsDb[senderKey] ?? createWalletLedger(from);
   if (senderBase.balanceNear + 1e-9 < amount) return null;
 
-  const recipientBase = accounts[recipientKey] ?? createWalletLedger(destination);
-  const senderDisplay = senderBase.address || formatNearAddress(senderLedger.accountId);
-  const recipientDisplay = recipientBase.address || formatNearAddress(destination);
+  const recipientBase = walletsDb[recipientKey] ?? createWalletLedger(to);
   const { sender: senderTransaction, recipient: recipientTransaction } = createTransactions({
     amount,
-    senderDisplay,
-    recipientDisplay,
+    fromAddress: from,
+    toAddress: to,
   });
 
   const senderNext: WalletLedger = {
     ...senderBase,
-    accountId: senderLedger.accountId,
-    address: formatNearAddress(senderLedger.accountId),
+    accountId: senderBase.accountId || from,
+    address: senderBase.address || formatNearAddress(from),
     balanceNear: roundNear(senderBase.balanceNear - amount),
     transactions: [senderTransaction, ...senderBase.transactions],
   };
   const recipientNext: WalletLedger = {
     ...recipientBase,
-    accountId: recipientBase.accountId || destination,
-    address: recipientDisplay,
+    accountId: recipientBase.accountId || to,
+    address: recipientBase.address || formatNearAddress(to),
     balanceNear: roundNear(recipientBase.balanceNear + amount),
     transactions: [recipientTransaction, ...recipientBase.transactions],
   };
 
-  accounts[senderKey] = senderNext;
-  accounts[recipientKey] = recipientNext;
-  saveAccountsLedger(accounts, true);
+  walletsDb[senderKey] = senderNext;
+  walletsDb[recipientKey] = recipientNext;
+  saveWalletsDb(walletsDb, true);
   persistWalletLedgerSnapshot(senderNext);
   persistWalletLedgerSnapshot(recipientNext);
+
+  if (notifySync) {
+    window.dispatchEvent(new CustomEvent(WALLET_SYNC_EVENT, {
+      detail: { fromAddr: from, toAddr: to },
+    }));
+  }
 
   return {
     senderLedger: senderNext,
@@ -490,31 +545,50 @@ function executeAccountTransfer(
   };
 }
 
-export function sendNear(
-  senderLedger: WalletLedger,
-  recipientAddress: string,
-  amountNear: number,
+export function transferNear(
+  fromAddr: string,
+  toAddr: string,
+  amount: number,
 ): NearTransferReceipt | null {
-  return executeAccountTransfer(senderLedger, recipientAddress, amountNear, ({ amount, senderDisplay, recipientDisplay }) => ({
+  return executeTransfer(fromAddr, toAddr, amount, ({ amount: parsedAmount, fromAddress, toAddress }) => ({
     sender: {
       id: `tx-withdraw-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
       type: "WITHDRAWAL_DEBIT",
-      amount: `-${amount.toFixed(2)} NEAR`,
-      description: `Transferred to ${recipientDisplay}`,
-      recipient: recipientDisplay,
+      amount: `-${parsedAmount.toFixed(2)} NEAR`,
+      description: `Transferred to ${toAddress}`,
+      recipient: toAddress,
       status: "CONFIRMED",
       timestamp: "Just now",
     },
     recipient: {
       id: `tx-deposit-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
       type: "DEPOSIT_CREDIT",
-      amount: `+${amount.toFixed(2)} NEAR`,
-      description: `Received from ${senderDisplay}`,
-      recipient: senderDisplay,
+      amount: `+${parsedAmount.toFixed(2)} NEAR`,
+      description: `+${parsedAmount.toFixed(2)} NEAR received from ${fromAddress}`,
+      recipient: fromAddress,
       status: "SUCCESS",
       timestamp: "Just now",
     },
-  }));
+  }), true);
+}
+
+export function sendNear(
+  senderLedger: WalletLedger,
+  recipientAddress: string,
+  amountNear: number,
+): NearTransferReceipt | null {
+  syncSenderLedger(senderLedger);
+  return transferNear(senderLedger.accountId, recipientAddress, amountNear);
+}
+
+function syncSenderLedger(senderLedger: WalletLedger): void {
+  if (typeof window === "undefined") return;
+  const senderKey = normalizeAccountAddress(senderLedger.accountId);
+  if (!senderKey) return;
+  const walletsDb = loadWalletsDb();
+  if (walletsDb[senderKey]) return;
+  walletsDb[senderKey] = senderLedger;
+  saveWalletsDb(walletsDb);
 }
 
 export function settleQueryPayment(
@@ -523,13 +597,14 @@ export function settleQueryPayment(
   vaultTitle: string,
   publisherAddress: string,
 ): NearTransferReceipt | null {
-  return executeAccountTransfer(senderLedger, publisherAddress, amountNear, ({ amount, senderDisplay, recipientDisplay }) => ({
+  syncSenderLedger(senderLedger);
+  return executeTransfer(senderLedger.accountId, publisherAddress, amountNear, ({ amount, fromAddress, toAddress }) => ({
     sender: {
       id: `tx-query-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
       type: "WITHDRAWAL_DEBIT",
       amount: `-${amount.toFixed(2)} NEAR`,
       description: `Query fee for ${vaultTitle}`,
-      recipient: recipientDisplay,
+      recipient: toAddress,
       status: "CONFIRMED",
       timestamp: "Just now",
     },
@@ -538,11 +613,11 @@ export function settleQueryPayment(
       type: "DEPOSIT_CREDIT",
       amount: `+${amount.toFixed(2)} NEAR`,
       description: `Query payout for ${vaultTitle}`,
-      recipient: senderDisplay,
+      recipient: fromAddress,
       status: "SUCCESS",
       timestamp: "Just now",
     },
-  }));
+  }), false);
 }
 
 export function createWithdrawal(
@@ -554,4 +629,3 @@ export function createWithdrawal(
   if (!transfer) return null;
   return { ledger: transfer.senderLedger, transaction: transfer.senderTransaction };
 }
-

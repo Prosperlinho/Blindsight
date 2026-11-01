@@ -40,6 +40,12 @@ export default function Home() {
   const [isExportKeyOpen, setIsExportKeyOpen] = useState(false);
 
   useEffect(() => {
+    if (!walletSuccessMessage) return;
+    const timer = window.setTimeout(() => setWalletSuccessMessage(""), 5000);
+    return () => window.clearTimeout(timer);
+  }, [walletSuccessMessage]);
+
+  useEffect(() => {
     let cancelled = false;
     let cleanup: (() => void) | undefined;
 
@@ -431,8 +437,6 @@ export default function Home() {
           onProviderAddressChange={setProviderAddress}
           walletLedger={walletLedger}
           onSettleQuery={handleSettleQuery}
-          onOpenDeposit={() => handleOpenWalletAction("deposit")}
-          onOpenWithdraw={() => handleOpenWalletAction("withdraw")}
         />
 
         <footer className="mt-7 flex flex-col gap-3 border-t border-emerald-500/20 pt-4 text-[10px] text-[#7D9187] sm:flex-row sm:items-center sm:justify-between">
