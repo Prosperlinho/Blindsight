@@ -14,6 +14,13 @@ export type EmbeddedWallet = {
   keyPair: KeyPair;
 };
 
+function generatedAccountId(keyPair: KeyPair): string {
+  const identifier = Array.from(keyPair.getPublicKey().data.slice(0, 10), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+  return `Bs-${identifier}.near`;
+}
+
 export function createInstantWallet(): EmbeddedWallet {
   if (typeof window === "undefined") {
     throw new Error("An embedded wallet can only be created in a browser.");
@@ -21,7 +28,7 @@ export function createInstantWallet(): EmbeddedWallet {
 
   const keyPair = KeyPair.fromRandom("ed25519");
   const publicKey = keyPair.getPublicKey().toString();
-  const accountId = keyToImplicitAddress(publicKey);
+  const accountId = generatedAccountId(keyPair);
 
   window.localStorage.setItem(PRIVATE_KEY_STORAGE_KEY, keyPair.toString());
   window.localStorage.setItem(ACCOUNT_ID_STORAGE_KEY, accountId);
@@ -54,7 +61,9 @@ export function importPrivateKey(secretKey: string): string {
     throw new Error("The private key is invalid. Check the key and try again.");
   }
 
-  const accountId = keyToImplicitAddress(keyPair.getPublicKey().toString());
+  const legacyAccountId = keyToImplicitAddress(keyPair.getPublicKey().toString());
+  const legacyLedger = loadWalletsDb()[normalizeAccountAddress(legacyAccountId)];
+  const accountId = legacyLedger ? legacyAccountId : generatedAccountId(keyPair);
   window.localStorage.setItem(PRIVATE_KEY_STORAGE_KEY, keyPair.toString());
   window.localStorage.setItem(ACCOUNT_ID_STORAGE_KEY, accountId);
 
@@ -77,12 +86,13 @@ export function getStoredEmbeddedWallet(): EmbeddedWallet | null {
 
   const keyPair = KeyPair.fromString(privateKey as KeyPairString);
   const publicKey = keyPair.getPublicKey().toString();
-  const accountId = keyToImplicitAddress(publicKey);
-  if (accountId !== storedAccountId) {
+  const derivedAccountId = keyToImplicitAddress(publicKey);
+  const isGeneratedDemoAccount = /^Bs-[0-9a-f]{20}\.near$/i.test(storedAccountId);
+  if (derivedAccountId !== storedAccountId && !isGeneratedDemoAccount) {
     throw new Error("The stored embedded wallet key does not match its account ID.");
   }
 
-  return { accountId, publicKey, keyPair };
+  return { accountId: storedAccountId, publicKey, keyPair };
 }
 
 export function disconnectEmbeddedWallet() {
@@ -157,11 +167,7 @@ export function formatNearAmount(value: number): string {
 }
 
 function formatTransactionTimestamp(): string {
-  return new Date().toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
+  return new Date().toLocaleTimeString();
 }
 
 function createFaucetTransaction(): WalletTransaction {

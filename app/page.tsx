@@ -38,7 +38,6 @@ export default function Home() {
   const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
   const [walletError, setWalletError] = useState<string | null>(null);
   const [walletSuccessMessage, setWalletSuccessMessage] = useState("");
-  const [isMobileWalletOpen, setIsMobileWalletOpen] = useState(false);
   const [walletModal, setWalletModal] = useState<"deposit" | "withdraw" | null>(null);
   const [isExportKeyOpen, setIsExportKeyOpen] = useState(false);
 
@@ -155,7 +154,6 @@ export default function Home() {
   }
 
   function handleOpenWalletAction(action: "deposit" | "withdraw") {
-    setIsMobileWalletOpen(false);
     setWalletModal(action);
   }
 
@@ -164,7 +162,7 @@ export default function Home() {
       return { success: false, message: "Connect a wallet before depositing." };
     }
 
-    const baseLedger = walletLedger ?? ensureWalletLedger(walletAccountId);
+    const baseLedger = ensureWalletLedger(walletAccountId);
     const deposit = createDeposit(baseLedger, amountNear);
     if (!deposit) {
       return { success: false, message: "Enter a valid deposit amount." };
@@ -251,7 +249,6 @@ export default function Home() {
 
   function handleOpenExportKey() {
     setWalletError(null);
-    setIsMobileWalletOpen(false);
     setIsExportKeyOpen(true);
   }
 
@@ -287,7 +284,6 @@ export default function Home() {
       setWalletSource(selectorState.connected ? "selector" : embeddedWallet ? "embedded" : null);
       setWalletLedger(connectedAccountId ? ensureWalletLedger(connectedAccountId) : null);
       setWalletSuccessMessage("");
-      setIsMobileWalletOpen(false);
     } catch (error) {
       setWalletError(error instanceof Error ? error.message : "Could not disconnect the wallet.");
     } finally {
@@ -328,53 +324,16 @@ export default function Home() {
               <span>NEAR testnet · preview</span>
             </div>
             {walletAccountId ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => handleOpenWalletAction("withdraw")}
-                  aria-label={`Send NEAR. Wallet balance ${walletLedger ? formatNearAmount(walletLedger.balanceNear) : "2.00 NEAR"}`}
-                  className="flex items-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-950/60 px-3 py-1.5 text-xs font-semibold text-emerald-400 transition hover:border-emerald-500/50 sm:hidden"
-                >
-                  <span className="size-1.5 rounded-full bg-emerald-400" />
-                  {walletLedger ? formatNearAmount(walletLedger.balanceNear) : "2.00 NEAR"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsMobileWalletOpen((current) => !current)}
-                  aria-expanded={isMobileWalletOpen}
-                  aria-controls="mobile-wallet-drawer"
-                  aria-label="Toggle wallet controls"
-                  className="border border-emerald-500/20 px-2 py-1.5 text-[10px] text-[#A7B9B0] transition hover:border-emerald-500/40 hover:text-[#F0FDF4] sm:hidden"
-                >
-                  Wallet
-                </button>
-                <div className="hidden items-center gap-2 sm:flex">
-                  <WalletSummary
-                    ledger={walletLedger}
-                    variant="header"
-                    onBalanceClick={() => handleOpenWalletAction("withdraw")}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => void handleWalletDisconnect()}
-                    disabled={isWalletLoading}
-                    className="border border-emerald-500/20 px-2 py-2 text-[10px] text-[#A7B9B0] transition hover:border-[#F87171]/60 hover:text-[#FCA5A5] disabled:cursor-wait disabled:opacity-60"
-                    aria-label={`Disconnect wallet ${walletAccountId}`}
-                  >
-                    Disconnect
-                  </button>
-                  {walletSource === "embedded" && (
-                    <button
-                      type="button"
-                      onClick={handleOpenExportKey}
-                      className="border border-emerald-500/30 bg-emerald-950/40 px-2 py-2 text-[10px] text-emerald-400 transition hover:border-emerald-500/40"
-                      aria-label="Export embedded wallet backup key"
-                    >
-                      Export Key
-                    </button>
-                  )}
-                </div>
-              </>
+              <WalletSummary
+                ledger={walletLedger}
+                variant="header"
+                onBalanceClick={() => handleOpenWalletAction("withdraw")}
+                onFaucetClick={() => { handleDeposit(1); }}
+                onDepositClick={() => handleOpenWalletAction("deposit")}
+                onWithdrawClick={() => handleOpenWalletAction("withdraw")}
+                onExportKeyClick={walletSource === "embedded" ? handleOpenExportKey : undefined}
+                onDisconnectClick={() => void handleWalletDisconnect()}
+              />
             ) : (
               <button
                 type="button"
@@ -388,50 +347,6 @@ export default function Home() {
           </div>
         </div>
 
-        {walletAccountId && isMobileWalletOpen && (
-          <div
-            id="mobile-wallet-drawer"
-            className="absolute inset-x-4 top-[72px] z-50 sm:hidden"
-          >
-            <div className="rounded-xl border border-emerald-500/25 bg-[#0B0F17]/95 p-3 shadow-[0_24px_80px_rgba(0,0,0,0.65)] backdrop-blur-xl">
-              <div className="mb-2 flex items-center justify-between gap-3">
-                <span className="text-[10px] uppercase tracking-[0.14em] text-[#7D9187]">Wallet</span>
-                <button
-                  type="button"
-                  onClick={() => setIsMobileWalletOpen(false)}
-                  aria-label="Close wallet details"
-                  className="text-sm text-[#A7B9B0] transition hover:text-[#F0FDF4]"
-                >
-                  ×
-                </button>
-              </div>
-              <WalletSummary
-                ledger={walletLedger}
-                onDepositClick={() => handleOpenWalletAction("deposit")}
-                onWithdrawClick={() => handleOpenWalletAction("withdraw")}
-              />
-              <div className="mt-3 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => void handleWalletDisconnect()}
-                  disabled={isWalletLoading}
-                  className="min-w-0 flex-1 border border-emerald-500/20 px-3 py-2 text-[11px] text-[#A7B9B0] transition hover:border-[#F87171]/60 hover:text-[#FCA5A5] disabled:cursor-wait disabled:opacity-60"
-                >
-                  Disconnect
-                </button>
-                {walletSource === "embedded" && (
-                  <button
-                    type="button"
-                    onClick={handleOpenExportKey}
-                    className="min-w-0 flex-1 border border-emerald-500/30 bg-emerald-950/40 px-3 py-2 text-[11px] text-emerald-400 transition hover:border-emerald-500/40"
-                  >
-                    Export Key
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
       </header>
 
       <main id="home" className="mx-auto max-w-[1420px] px-5 pb-12 pt-9 sm:px-8 sm:pt-12">
@@ -470,8 +385,6 @@ export default function Home() {
           onProviderAddressChange={setProviderAddress}
           walletLedger={walletLedger}
           onSettleQuery={handleSettleQuery}
-          onOpenDeposit={() => handleOpenWalletAction("deposit")}
-          onOpenWithdraw={() => handleOpenWalletAction("withdraw")}
         />
 
         <footer className="mt-7 flex flex-col gap-3 border-t border-emerald-500/20 pt-4 text-[10px] text-[#7D9187] sm:flex-row sm:items-center sm:justify-between">

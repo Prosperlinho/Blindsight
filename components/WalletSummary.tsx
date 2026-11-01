@@ -9,6 +9,9 @@ type WalletSummaryProps = {
   onDepositClick?: () => void;
   onWithdrawClick?: () => void;
   onBalanceClick?: () => void;
+  onFaucetClick?: () => void;
+  onExportKeyClick?: () => void;
+  onDisconnectClick?: () => void;
 };
 
 function TransactionLedger({ transactions }: { transactions: WalletTransaction[] }) {
@@ -68,14 +71,39 @@ export default function WalletSummary({
   onDepositClick,
   onWithdrawClick,
   onBalanceClick,
+  onFaucetClick,
+  onExportKeyClick,
+  onDisconnectClick,
 }: WalletSummaryProps) {
   const [copied, setCopied] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
   const timeoutRef = useRef<number | null>(null);
 
   useEffect(() => () => {
     if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
   }, []);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && !menuRef.current?.contains(event.target)) {
+        setMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [menuOpen]);
 
   async function handleCopyAddress() {
     if (!ledger) return;
@@ -103,7 +131,7 @@ export default function WalletSummary({
 
   if (variant === "header") {
     return (
-      <div className="relative flex items-center gap-1.5">
+      <div ref={menuRef} className="relative flex items-center gap-1.5">
         <div
           className="flex items-center gap-2 border border-[#34D399]/40 bg-[#0B0F17]/80 px-2.5 py-1.5 backdrop-blur-xl"
           title={ledger.address}
@@ -112,7 +140,7 @@ export default function WalletSummary({
           {onBalanceClick ? (
             <button
               type="button"
-              onClick={onBalanceClick}
+              onClick={() => { setMenuOpen(false); onBalanceClick(); }}
               className="shrink-0 font-mono text-[10px] font-medium text-[#34D399] transition hover:text-emerald-200"
               aria-label={`Send NEAR. Wallet balance ${formatNearAmount(ledger.balanceNear)}`}
             >
@@ -123,34 +151,82 @@ export default function WalletSummary({
               {formatNearAmount(ledger.balanceNear)}
             </span>
           )}
-          <span className="hidden max-w-[150px] truncate font-mono text-[10px] text-[#A7B9B0] xl:inline">
-            {ledger.address}
-          </span>
-          <button
-            type="button"
-            onClick={() => void handleCopyAddress()}
-            aria-label={`Copy wallet address ${ledger.address}`}
-            className="shrink-0 border-l border-emerald-500/20 pl-2 text-[10px] text-[#A7B9B0] transition hover:text-[#34D399]"
-          >
-            {copied ? "Copied" : "Copy"}
-          </button>
         </div>
         <button
           type="button"
-          onClick={() => setHistoryOpen((current) => !current)}
-          aria-expanded={historyOpen}
-          aria-controls="header-transaction-history"
-          className={`flex items-center gap-1.5 border px-2 py-1.5 text-[10px] transition ${
-            historyOpen
-              ? "border-emerald-500/40 bg-emerald-950/40 text-[#F0FDF4]"
-              : "border-emerald-500/20 text-[#A7B9B0] hover:border-emerald-500/40 hover:text-[#F0FDF4]"
-          }`}
+          onClick={() => setMenuOpen((current) => !current)}
+          aria-expanded={menuOpen}
+          aria-haspopup="menu"
+          aria-label="Open wallet actions"
+          className="grid size-8 place-items-center border border-emerald-500/25 bg-[#0B0F17]/80 text-[#A7B9B0] transition hover:border-emerald-500/50 hover:text-[#F0FDF4]"
         >
-          History
-          <span className="hidden border border-emerald-500/20 px-1 font-mono text-[9px] text-[#34D399] lg:inline">
-            {ledger.transactions.length}
-          </span>
+          <span aria-hidden="true">{menuOpen ? "×" : "⋮"}</span>
         </button>
+        {menuOpen && (
+          <div
+            role="menu"
+            aria-label="Wallet actions"
+            className="absolute right-0 top-full z-50 mt-2 w-[min(260px,calc(100vw-32px))] border border-emerald-500/25 bg-[#0B0F17]/95 p-1.5 shadow-[0_24px_80px_rgba(0,0,0,0.65)] backdrop-blur-xl"
+          >
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => { setMenuOpen(false); onFaucetClick?.(); }}
+              disabled={!onFaucetClick}
+              className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left text-[11px] text-[#E2F8EC] transition hover:bg-emerald-950/50 disabled:opacity-50"
+            >
+              <span>🚰 Testnet Faucet</span>
+              <span className="text-[9px] text-[#34D399]">+1.0 NEAR</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => { setMenuOpen(false); onDepositClick?.(); }}
+              disabled={!onDepositClick}
+              className="w-full px-3 py-2.5 text-left text-[11px] text-[#E2F8EC] transition hover:bg-emerald-950/50 disabled:opacity-50"
+            >
+              📥 Deposit NEAR
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => { setMenuOpen(false); onWithdrawClick?.(); }}
+              disabled={!onWithdrawClick}
+              className="w-full px-3 py-2.5 text-left text-[11px] text-[#E2F8EC] transition hover:bg-emerald-950/50 disabled:opacity-50"
+            >
+              📤 Send NEAR
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => { setMenuOpen(false); setHistoryOpen(true); }}
+              className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left text-[11px] text-[#E2F8EC] transition hover:bg-emerald-950/50"
+            >
+              <span>📜 Transaction History</span>
+              <span className="font-mono text-[9px] text-[#34D399]">{ledger.transactions.length}</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => { setMenuOpen(false); onExportKeyClick?.(); }}
+              disabled={!onExportKeyClick}
+              title={!onExportKeyClick ? "Key export is only available for embedded wallets." : undefined}
+              className="w-full px-3 py-2.5 text-left text-[11px] text-[#E2F8EC] transition hover:bg-emerald-950/50 disabled:opacity-50"
+            >
+              🔑 Export Key
+            </button>
+            <div className="my-1 border-t border-emerald-500/15" />
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => { setMenuOpen(false); onDisconnectClick?.(); }}
+              disabled={!onDisconnectClick}
+              className="w-full px-3 py-2.5 text-left text-[11px] text-[#FCA5A5] transition hover:bg-[#261719] disabled:opacity-50"
+            >
+              🔴 Disconnect
+            </button>
+          </div>
+        )}
         {historyOpen && (
           <div
             id="header-transaction-history"
