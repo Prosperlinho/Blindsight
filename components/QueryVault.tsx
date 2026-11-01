@@ -24,12 +24,15 @@ import {
   type QuerySettlementResult,
   type WalletLedger,
 } from "@/lib/embeddedWallet";
+import WalletSummary from "@/components/WalletSummary";
 
 type QueryVaultProps = {
   providerAddress: string;
   onProviderAddressChange: (address: string) => void;
   walletLedger: WalletLedger | null;
   onSettleQuery: (priceNear: number, vaultTitle: string, publisherAddress: string) => QuerySettlementResult;
+  onOpenDeposit: () => void;
+  onOpenWithdraw: () => void;
 };
 
 type ViewTab = "explorer" | "publisher";
@@ -240,6 +243,8 @@ export default function QueryVault({
   onProviderAddressChange,
   walletLedger,
   onSettleQuery,
+  onOpenDeposit,
+  onOpenWithdraw,
 }: QueryVaultProps) {
   const [activeTab, setActiveTab] = useState<ViewTab>("explorer");
   const [vaults, setVaults] = useState<MarketplaceVault[]>(INITIAL_VAULTS);
@@ -410,7 +415,11 @@ export default function QueryVault({
       {
         id: window.crypto.randomUUID(),
         message: `${vault.title} withdrawn from enclave marketplace`,
-        timestamp: "Just now",
+        timestamp: new Date().toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        }),
       },
       ...current,
     ]);
@@ -787,6 +796,12 @@ export default function QueryVault({
             aria-labelledby="publisher-tab"
             className="space-y-4"
           >
+            <WalletSummary
+              ledger={walletLedger}
+              onDepositClick={onOpenDeposit}
+              onWithdrawClick={onOpenWithdraw}
+            />
+
             <div>
               <h3 className="text-[12px] font-medium text-[#E2F8EC]">Publish a vault</h3>
               <p className="mt-1 text-[11px] leading-5 text-[#A7B9B0]">

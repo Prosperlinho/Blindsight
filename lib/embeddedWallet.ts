@@ -156,6 +156,14 @@ export function formatNearAmount(value: number): string {
   return `${roundNear(value).toFixed(2)} NEAR`;
 }
 
+function formatTransactionTimestamp(): string {
+  return new Date().toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
 function createFaucetTransaction(): WalletTransaction {
   return {
     id: "tx-faucet-01",
@@ -163,7 +171,7 @@ function createFaucetTransaction(): WalletTransaction {
     amount: "+2.00 NEAR",
     description: "Test Faucet Signup Bonus",
     status: "SUCCESS",
-    timestamp: "Just now",
+    timestamp: formatTransactionTimestamp(),
   };
 }
 
@@ -304,7 +312,7 @@ export function seedAccountEarnings(
             amount: `+${earnings.toFixed(2)} NEAR`,
             description: "Historical vault revenue",
             status: "SUCCESS",
-            timestamp: "Recorded",
+            timestamp: formatTransactionTimestamp(),
           },
           ...baseLedger.transactions,
         ]
@@ -421,7 +429,7 @@ export function createQueryDebit(
     description: `Query fee for ${vaultTitle}`,
     recipient: "Publisher Vault",
     status: "CONFIRMED",
-    timestamp: "Just now",
+    timestamp: formatTransactionTimestamp(),
   };
 
   return {
@@ -447,7 +455,7 @@ export function createDeposit(
     amount: `+${amount.toFixed(2)} NEAR`,
     description: "Testnet faucet top-up",
     status: "SUCCESS",
-    timestamp: "Just now",
+    timestamp: formatTransactionTimestamp(),
   };
 
   if (typeof window !== "undefined") {
@@ -470,6 +478,7 @@ type TransferTransactionFactory = (context: {
   amount: number;
   fromAddress: string;
   toAddress: string;
+  timestamp: string;
 }) => { sender: WalletTransaction; recipient: WalletTransaction };
 
 function persistWalletLedgerSnapshot(ledger: WalletLedger): void {
@@ -508,6 +517,7 @@ function executeTransfer(
     amount,
     fromAddress: from,
     toAddress: to,
+    timestamp: formatTransactionTimestamp(),
   });
 
   const senderNext: WalletLedger = {
@@ -550,7 +560,7 @@ export function transferNear(
   toAddr: string,
   amount: number,
 ): NearTransferReceipt | null {
-  return executeTransfer(fromAddr, toAddr, amount, ({ amount: parsedAmount, fromAddress, toAddress }) => ({
+  return executeTransfer(fromAddr, toAddr, amount, ({ amount: parsedAmount, fromAddress, toAddress, timestamp }) => ({
     sender: {
       id: `tx-withdraw-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
       type: "WITHDRAWAL_DEBIT",
@@ -558,7 +568,7 @@ export function transferNear(
       description: `Transferred to ${toAddress}`,
       recipient: toAddress,
       status: "CONFIRMED",
-      timestamp: "Just now",
+      timestamp,
     },
     recipient: {
       id: `tx-deposit-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
@@ -567,7 +577,7 @@ export function transferNear(
       description: `+${parsedAmount.toFixed(2)} NEAR received from ${fromAddress}`,
       recipient: fromAddress,
       status: "SUCCESS",
-      timestamp: "Just now",
+      timestamp,
     },
   }), true);
 }
@@ -598,7 +608,7 @@ export function settleQueryPayment(
   publisherAddress: string,
 ): NearTransferReceipt | null {
   syncSenderLedger(senderLedger);
-  return executeTransfer(senderLedger.accountId, publisherAddress, amountNear, ({ amount, fromAddress, toAddress }) => ({
+  return executeTransfer(senderLedger.accountId, publisherAddress, amountNear, ({ amount, fromAddress, toAddress, timestamp }) => ({
     sender: {
       id: `tx-query-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
       type: "WITHDRAWAL_DEBIT",
@@ -606,7 +616,7 @@ export function settleQueryPayment(
       description: `Query fee for ${vaultTitle}`,
       recipient: toAddress,
       status: "CONFIRMED",
-      timestamp: "Just now",
+      timestamp,
     },
     recipient: {
       id: `tx-deposit-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
@@ -615,7 +625,7 @@ export function settleQueryPayment(
       description: `Query payout for ${vaultTitle}`,
       recipient: fromAddress,
       status: "SUCCESS",
-      timestamp: "Just now",
+      timestamp,
     },
   }), false);
 }

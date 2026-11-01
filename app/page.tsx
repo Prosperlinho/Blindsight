@@ -17,6 +17,9 @@ import {
   formatNearAmount,
   getStoredEmbeddedWallet,
   importPrivateKey as importEmbeddedPrivateKey,
+  ACCOUNTS_LEDGER_EVENT,
+  WALLET_SYNC_EVENT,
+  WALLETS_DB_STORAGE_KEY,
   roundNear,
   saveWalletLedger,
   sendNear,
@@ -44,6 +47,24 @@ export default function Home() {
     const timer = window.setTimeout(() => setWalletSuccessMessage(""), 5000);
     return () => window.clearTimeout(timer);
   }, [walletSuccessMessage]);
+
+  useEffect(() => {
+    if (!walletAccountId) return;
+
+    const refreshCurrentWallet = () => setWalletLedger(ensureWalletLedger(walletAccountId));
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === WALLETS_DB_STORAGE_KEY || event.key === null) refreshCurrentWallet();
+    };
+
+    window.addEventListener(WALLET_SYNC_EVENT, refreshCurrentWallet);
+    window.addEventListener(ACCOUNTS_LEDGER_EVENT, refreshCurrentWallet);
+    window.addEventListener("storage", handleStorage);
+    return () => {
+      window.removeEventListener(WALLET_SYNC_EVENT, refreshCurrentWallet);
+      window.removeEventListener(ACCOUNTS_LEDGER_EVENT, refreshCurrentWallet);
+      window.removeEventListener("storage", handleStorage);
+    };
+  }, [walletAccountId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -120,7 +141,7 @@ export default function Home() {
       return { success: false, message: "Connect a wallet to settle this query." };
     }
 
-    const baseLedger = walletLedger ?? ensureWalletLedger(walletAccountId);
+    const baseLedger = ensureWalletLedger(walletAccountId);
     const settlement = settleQueryPayment(baseLedger, priceNear, vaultTitle, publisherAddress);
     if (!settlement) {
       return {
@@ -160,7 +181,7 @@ export default function Home() {
       return { success: false, message: "Connect a wallet before sending funds." };
     }
 
-    const baseLedger = walletLedger ?? ensureWalletLedger(walletAccountId);
+    const baseLedger = ensureWalletLedger(walletAccountId);
     const amount = roundNear(amountNear);
     const destination = recipient.trim();
     if (!Number.isFinite(amount) || amount <= 0) {
@@ -310,17 +331,29 @@ export default function Home() {
               <>
                 <button
                   type="button"
-                  onClick={() => setIsMobileWalletOpen((current) => !current)}
-                  aria-expanded={isMobileWalletOpen}
-                  aria-controls="mobile-wallet-drawer"
-                  aria-label={`Wallet balance ${walletLedger ? formatNearAmount(walletLedger.balanceNear) : "2.00 NEAR"}`}
+                  onClick={() => handleOpenWalletAction("withdraw")}
+                  aria-label={`Send NEAR. Wallet balance ${walletLedger ? formatNearAmount(walletLedger.balanceNear) : "2.00 NEAR"}`}
                   className="flex items-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-950/60 px-3 py-1.5 text-xs font-semibold text-emerald-400 transition hover:border-emerald-500/50 sm:hidden"
                 >
                   <span className="size-1.5 rounded-full bg-emerald-400" />
                   {walletLedger ? formatNearAmount(walletLedger.balanceNear) : "2.00 NEAR"}
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setIsMobileWalletOpen((current) => !current)}
+                  aria-expanded={isMobileWalletOpen}
+                  aria-controls="mobile-wallet-drawer"
+                  aria-label="Toggle wallet controls"
+                  className="border border-emerald-500/20 px-2 py-1.5 text-[10px] text-[#A7B9B0] transition hover:border-emerald-500/40 hover:text-[#F0FDF4] sm:hidden"
+                >
+                  Wallet
+                </button>
                 <div className="hidden items-center gap-2 sm:flex">
-                  <WalletSummary ledger={walletLedger} variant="header" />
+                  <WalletSummary
+                    ledger={walletLedger}
+                    variant="header"
+                    onBalanceClick={() => handleOpenWalletAction("withdraw")}
+                  />
                   <button
                     type="button"
                     onClick={() => void handleWalletDisconnect()}
@@ -437,6 +470,8 @@ export default function Home() {
           onProviderAddressChange={setProviderAddress}
           walletLedger={walletLedger}
           onSettleQuery={handleSettleQuery}
+          onOpenDeposit={() => handleOpenWalletAction("deposit")}
+          onOpenWithdraw={() => handleOpenWalletAction("withdraw")}
         />
 
         <footer className="mt-7 flex flex-col gap-3 border-t border-emerald-500/20 pt-4 text-[10px] text-[#7D9187] sm:flex-row sm:items-center sm:justify-between">

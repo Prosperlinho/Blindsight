@@ -8,6 +8,7 @@ type WalletSummaryProps = {
   variant?: "header" | "panel";
   onDepositClick?: () => void;
   onWithdrawClick?: () => void;
+  onBalanceClick?: () => void;
 };
 
 function TransactionLedger({ transactions }: { transactions: WalletTransaction[] }) {
@@ -66,6 +67,7 @@ export default function WalletSummary({
   variant = "panel",
   onDepositClick,
   onWithdrawClick,
+  onBalanceClick,
 }: WalletSummaryProps) {
   const [copied, setCopied] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -107,9 +109,20 @@ export default function WalletSummary({
           title={ledger.address}
         >
           <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" />
-          <span className="shrink-0 font-mono text-[10px] font-medium text-[#34D399]">
-            {formatNearAmount(ledger.balanceNear)}
-          </span>
+          {onBalanceClick ? (
+            <button
+              type="button"
+              onClick={onBalanceClick}
+              className="shrink-0 font-mono text-[10px] font-medium text-[#34D399] transition hover:text-emerald-200"
+              aria-label={`Send NEAR. Wallet balance ${formatNearAmount(ledger.balanceNear)}`}
+            >
+              {formatNearAmount(ledger.balanceNear)}
+            </button>
+          ) : (
+            <span className="shrink-0 font-mono text-[10px] font-medium text-[#34D399]">
+              {formatNearAmount(ledger.balanceNear)}
+            </span>
+          )}
           <span className="hidden max-w-[150px] truncate font-mono text-[10px] text-[#A7B9B0] xl:inline">
             {ledger.address}
           </span>
