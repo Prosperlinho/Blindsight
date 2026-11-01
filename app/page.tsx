@@ -4,12 +4,19 @@ import { useEffect, useState } from "react";
 import Image from "next/image";
 import ConnectModal from "@/components/ConnectModal";
 import QueryVault from "@/components/QueryVault";
+import WalletSummary from "@/components/WalletSummary";
 import {
   createInstantWallet as generateEmbeddedWallet,
+  createQueryDebit,
   disconnectEmbeddedWallet,
+  ensureWalletLedger,
   exportPrivateKey as getEmbeddedPrivateKey,
+  formatNearAmount,
   getStoredEmbeddedWallet,
   importPrivateKey as importEmbeddedPrivateKey,
+  saveWalletLedger,
+  type QuerySettlementResult,
+  type WalletLedger,
 } from "@/lib/embeddedWallet";
 import { disconnectWallet, getWalletConnectionState, initializeWalletSelector, openWalletModal } from "@/lib/nearWallet";
 
@@ -17,6 +24,7 @@ export default function Home() {
   const [providerAddress, setProviderAddress] = useState("provider.near");
   const [walletAccountId, setWalletAccountId] = useState<string | null>(null);
   const [walletSource, setWalletSource] = useState<"embedded" | "selector" | null>(null);
+  const [walletLedger, setWalletLedger] = useState<WalletLedger | null>(null);
   const [isWalletLoading, setIsWalletLoading] = useState(false);
   const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
   const [walletError, setWalletError] = useState<string | null>(null);
@@ -34,6 +42,7 @@ export default function Home() {
         if (embeddedWallet) {
           setWalletAccountId(embeddedWallet.accountId);
           setWalletSource("embedded");
+          setWalletLedger(ensureWalletLedger(embeddedWallet.accountId));
         }
       } catch (error) {
         setWalletError(error instanceof Error ? error.message : "Could not restore the embedded wallet.");
@@ -57,6 +66,11 @@ export default function Home() {
 
         setWalletAccountId(accountId);
         setWalletSource(source);
+        setWalletLedger((current) => {
+          if (!accountId) return null;
+          if (current?.accountId === accountId) return current;
+          return ensureWalletLedger(accountId);
+        });
         if (accountId) {
           setIsConnectModalOpen(false);
           setWalletError(null);
@@ -88,6 +102,25 @@ export default function Home() {
     };
   }, []);
 
+  function handleSettleQuery(priceNear: number, vaultTitle: string): QuerySettlementResult {
+    if (!walletAccountId) {
+      return { success: false, message: "Connect a wallet to settle this query." };
+    }
+
+    const baseLedger = walletLedger ?? ensureWalletLedger(walletAccountId);
+    const settlement = createQueryDebit(baseLedger, priceNear, vaultTitle);
+    if (!settlement) {
+      return {
+        success: false,
+        message: `Insufficient balance. This query costs ${priceNear.toFixed(2)} NEAR and your wallet holds ${formatNearAmount(baseLedger.balanceNear)}.`,
+      };
+    }
+
+    saveWalletLedger(settlement.ledger);
+    setWalletLedger(settlement.ledger);
+    return { success: true, transactionId: settlement.transaction.id };
+  }
+
   function handleWalletConnect() {
     setWalletError(null);
     setIsConnectModalOpen(true);
@@ -100,6 +133,7 @@ export default function Home() {
       const wallet = generateEmbeddedWallet();
       setWalletAccountId(wallet.accountId);
       setWalletSource("embedded");
+      setWalletLedger(ensureWalletLedger(wallet.accountId));
       setWalletSuccessMessage(`Instant Wallet Created! Address: ${wallet.accountId}`);
       setIsConnectModalOpen(false);
     } catch (error) {
@@ -116,6 +150,7 @@ export default function Home() {
       const accountId = importEmbeddedPrivateKey(secretKey);
       setWalletAccountId(accountId);
       setWalletSource("embedded");
+      setWalletLedger(ensureWalletLedger(accountId));
       setWalletSuccessMessage(`Embedded wallet imported! Address: ${accountId}`);
       setIsConnectModalOpen(false);
     } catch (error) {
@@ -179,6 +214,7 @@ export default function Home() {
         : embeddedWallet?.accountId ?? null;
       setWalletAccountId(connectedAccountId);
       setWalletSource(selectorState.connected ? "selector" : embeddedWallet ? "embedded" : null);
+      setWalletLedger(connectedAccountId ? ensureWalletLedger(connectedAccountId) : null);
       setWalletSuccessMessage("");
     } catch (error) {
       setWalletError(error instanceof Error ? error.message : "Could not disconnect the wallet.");
@@ -221,16 +257,7 @@ export default function Home() {
             </div>
             {walletAccountId ? (
               <div className="flex items-center gap-2">
-                <div
-                  className="flex items-center gap-2 border border-[#34D399]/40 bg-[#0B0F17]/80 backdrop-blur-xl px-2.5 py-2 text-[10px] text-[#F0FDF4]"
-                  title={walletAccountId}
-                >
-                  <span className="inline-flex items-center gap-2">
-                    <span className="size-1.5 rounded-full bg-emerald-500" />
-                    <span className="text-[#A7B9B0]">Wallet</span>
-                  </span>
-                  <span className="max-w-[150px] truncate">{walletAccountId.length > 18 ? `${walletAccountId.slice(0, 8)}...${walletAccountId.slice(-8)}` : walletAccountId}</span>
-                </div>
+                <WalletSummary ledger={walletLedger} variant="header" />
                 <button
                   type="button"
                   onClick={() => void handleWalletDisconnect()}
@@ -302,6 +329,8 @@ export default function Home() {
         <QueryVault
           providerAddress={providerAddress}
           onProviderAddressChange={setProviderAddress}
+          walletLedger={walletLedger}
+          onSettleQuery={handleSettleQuery}
         />
 
         <footer className="mt-7 flex flex-col gap-3 border-t border-emerald-500/20 pt-4 text-[10px] text-[#7D9187] sm:flex-row sm:items-center sm:justify-between">

@@ -88,3 +88,164 @@ export function disconnectEmbeddedWallet() {
   window.localStorage.removeItem(PRIVATE_KEY_STORAGE_KEY);
   window.localStorage.removeItem(ACCOUNT_ID_STORAGE_KEY);
 }
+
+export type WalletTransactionType = "FAUCET_CREDIT" | "QUERY_DEBIT";
+export type WalletTransactionStatus = "SUCCESS" | "CONFIRMED";
+
+export type WalletTransaction = {
+  id: string;
+  type: WalletTransactionType;
+  amount: string;
+  description: string;
+  recipient?: string;
+  status: WalletTransactionStatus;
+  timestamp: string;
+};
+
+export type WalletLedger = {
+  accountId: string;
+  address: string;
+  balanceNear: number;
+  transactions: WalletTransaction[];
+};
+
+export type QuerySettlementResult = {
+  success: boolean;
+  message?: string;
+  transactionId?: string;
+};
+
+export const INITIAL_TEST_BALANCE_NEAR = 2;
+const WALLET_LEDGER_STORAGE_PREFIX = "blindsight_wallet_ledger_v1";
+
+function ledgerStorageKey(accountId: string) {
+  return `${WALLET_LEDGER_STORAGE_PREFIX}:${accountId}`;
+}
+
+export function formatNearAddress(accountId: string): string {
+  const normalized = accountId.trim();
+  if (!normalized) return "blindsight-user.testnet";
+  if (normalized.endsWith(".near") || normalized.endsWith(".testnet")) return normalized;
+  const compact = normalized.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return `blindsight-${compact.slice(0, 8) || "user"}.testnet`;
+}
+
+export function roundNear(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+export function formatNearAmount(value: number): string {
+  return `${roundNear(value).toFixed(2)} NEAR`;
+}
+
+function createFaucetTransaction(): WalletTransaction {
+  return {
+    id: "tx-faucet-01",
+    type: "FAUCET_CREDIT",
+    amount: "+2.00 NEAR",
+    description: "Test Faucet Signup Bonus",
+    status: "SUCCESS",
+    timestamp: "Just now",
+  };
+}
+
+export function createWalletLedger(accountId: string): WalletLedger {
+  return {
+    accountId,
+    address: formatNearAddress(accountId),
+    balanceNear: INITIAL_TEST_BALANCE_NEAR,
+    transactions: [createFaucetTransaction()],
+  };
+}
+
+function isWalletTransaction(value: unknown): value is WalletTransaction {
+  if (!value || typeof value !== "object") return false;
+  const transaction = value as Partial<WalletTransaction>;
+  return typeof transaction.id === "string"
+    && (transaction.type === "FAUCET_CREDIT" || transaction.type === "QUERY_DEBIT")
+    && typeof transaction.amount === "string"
+    && typeof transaction.description === "string"
+    && (transaction.recipient === undefined || typeof transaction.recipient === "string")
+    && (transaction.status === "SUCCESS" || transaction.status === "CONFIRMED")
+    && typeof transaction.timestamp === "string";
+}
+
+export function loadWalletLedger(accountId: string): WalletLedger | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const rawLedger = window.localStorage.getItem(ledgerStorageKey(accountId));
+    if (!rawLedger) return null;
+
+    const parsed = JSON.parse(rawLedger) as Partial<WalletLedger> | null;
+    if (!parsed || parsed.accountId !== accountId || typeof parsed.balanceNear !== "number") {
+      return null;
+    }
+
+    return {
+      accountId,
+      address: typeof parsed.address === "string" && parsed.address
+        ? parsed.address
+        : formatNearAddress(accountId),
+      balanceNear: Math.max(0, roundNear(parsed.balanceNear)),
+      transactions: Array.isArray(parsed.transactions)
+        ? parsed.transactions.filter(isWalletTransaction)
+        : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function saveWalletLedger(ledger: WalletLedger): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(ledgerStorageKey(ledger.accountId), JSON.stringify(ledger));
+  } catch {
+    // The in-memory React state remains authoritative if storage is unavailable.
+  }
+}
+
+export function ensureWalletLedger(accountId: string): WalletLedger {
+  const existingLedger = loadWalletLedger(accountId);
+  if (existingLedger) return existingLedger;
+
+  const ledger = createWalletLedger(accountId);
+  saveWalletLedger(ledger);
+  return ledger;
+}
+
+export function createQueryDebit(
+  ledger: WalletLedger,
+  amountNear: number,
+  vaultTitle: string,
+): { ledger: WalletLedger; transaction: WalletTransaction } | null {
+  const amount = roundNear(amountNear);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  if (ledger.balanceNear + 1e-9 < amount) return null;
+
+  const transaction: WalletTransaction = {
+    id: `tx-query-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    type: "QUERY_DEBIT",
+    amount: `-${amount.toFixed(2)} NEAR`,
+    description: `Query fee for ${vaultTitle}`,
+    recipient: "Publisher Vault",
+    status: "CONFIRMED",
+    timestamp: "Just now",
+  };
+
+  return {
+    transaction,
+    ledger: {
+      ...ledger,
+      balanceNear: roundNear(ledger.balanceNear - amount),
+      transactions: [transaction, ...ledger.transactions],
+    },
+  };
+}
+

@@ -8,10 +8,14 @@ import {
   type DragEvent,
   type FormEvent,
 } from "react";
+import WalletSummary from "@/components/WalletSummary";
+import { formatNearAmount, roundNear, type QuerySettlementResult, type WalletLedger } from "@/lib/embeddedWallet";
 
 type QueryVaultProps = {
   providerAddress: string;
   onProviderAddressChange: (address: string) => void;
+  walletLedger: WalletLedger | null;
+  onSettleQuery: (priceNear: number, vaultTitle: string) => QuerySettlementResult;
 };
 
 type ViewTab = "explorer" | "publisher";
@@ -26,6 +30,7 @@ type MarketplaceVault = {
   rows: number;
   updated: string;
   dataset: string;
+  earningsNear: number;
 };
 
 type DraftFile = {
@@ -52,6 +57,7 @@ const INITIAL_VAULTS: MarketplaceVault[] = [
     priceNear: "0.1",
     rows: 18420,
     updated: "2h ago",
+    earningsNear: 184.6,
     dataset: `Q3 Financial & Market Demand
 Total revenue: $4.2M, up 34% year over year.
 Net revenue retention: 118% across enterprise accounts.
@@ -72,6 +78,7 @@ Largest risk: inference cost volatility during peak demand.`,
     priceNear: "0.15",
     rows: 12480,
     updated: "5h ago",
+    earningsNear: 96.25,
     dataset: `Medical Research Cohort 2026
 De-identified participants: 12,480 across 14 sites.
 Primary endpoint: 23% reduction in biomarker variance.
@@ -91,6 +98,7 @@ Projected enrollment for 2027: 18,000 participants.`,
     priceNear: "0.08",
     rows: 342,
     updated: "1d ago",
+    earningsNear: 42.18,
     dataset: `Solidity Security Audit Report
 Contracts reviewed: 9 core contracts and 3 upgradeable proxies.
 Critical findings: 0 open, 2 resolved.
@@ -110,6 +118,7 @@ Largest risk: privileged upgrade path requires operational discipline.`,
     priceNear: "0.12",
     rows: 9640,
     updated: "3h ago",
+    earningsNear: 128.9,
     dataset: `DeFi Liquidity Insights
 Total value locked: $186M across 6 pools.
 Stablecoin pool depth: $74M with 0.04% median slippage on $1M swaps.
@@ -206,7 +215,12 @@ function buildVaultInsight(vault: MarketplaceVault, query: string) {
   ].join("\n");
 }
 
-export default function QueryVault({ providerAddress, onProviderAddressChange }: QueryVaultProps) {
+export default function QueryVault({
+  providerAddress,
+  onProviderAddressChange,
+  walletLedger,
+  onSettleQuery,
+}: QueryVaultProps) {
   const [activeTab, setActiveTab] = useState<ViewTab>("explorer");
   const [vaults, setVaults] = useState<MarketplaceVault[]>(INITIAL_VAULTS);
   const [selectedVaultId, setSelectedVaultId] = useState<string>(INITIAL_VAULTS[0].id);
@@ -214,6 +228,7 @@ export default function QueryVault({ providerAddress, onProviderAddressChange }:
   const [isExecuting, setIsExecuting] = useState(false);
   const [answer, setAnswer] = useState<VaultAnswer | null>(null);
   const [explorerNotice, setExplorerNotice] = useState("");
+  const [settlementError, setSettlementError] = useState("");
 
   const [draftFiles, setDraftFiles] = useState<DraftFile[]>([]);
   const [draftTitle, setDraftTitle] = useState("");
@@ -249,6 +264,7 @@ export default function QueryVault({ providerAddress, onProviderAddressChange }:
     setAnswer(null);
     setIsExecuting(false);
     setExplorerNotice("");
+    setSettlementError("");
   }
 
   function handleRunQuery(event: FormEvent<HTMLFormElement>) {
@@ -257,11 +273,24 @@ export default function QueryVault({ providerAddress, onProviderAddressChange }:
     if (!submittedQuery || isExecuting) return;
 
     const vault = selectedVault;
+    const priceNear = Number(vault.priceNear);
+    const settlement = onSettleQuery(priceNear, vault.title);
+    if (!settlement.success) {
+      setSettlementError(settlement.message ?? "The query could not be settled. Check your wallet balance.");
+      return;
+    }
+
     const runId = runIdRef.current + 1;
     runIdRef.current = runId;
     setIsExecuting(true);
     setAnswer(null);
     setExplorerNotice("");
+    setSettlementError("");
+    setVaults((current) => current.map((entry) => (
+      entry.id === vault.id
+        ? { ...entry, earningsNear: roundNear(entry.earningsNear + priceNear) }
+        : entry
+    )));
 
     if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
     timeoutRef.current = window.setTimeout(() => {
@@ -359,6 +388,7 @@ export default function QueryVault({ providerAddress, onProviderAddressChange }:
       rows: estimateRows(dataset),
       updated: "just now",
       dataset,
+      earningsNear: 0,
     };
 
     setVaults((current) => [newVault, ...current]);
@@ -438,6 +468,25 @@ export default function QueryVault({ providerAddress, onProviderAddressChange }:
             aria-labelledby="explorer-tab"
             className="space-y-4"
           >
+            <WalletSummary ledger={walletLedger} />
+
+            {settlementError && (
+              <div
+                role="alert"
+                className="flex items-start justify-between gap-3 border border-[#FCA5A5]/25 bg-[#261719] px-3 py-2 text-[11px] leading-5 text-[#FCA5A5]"
+              >
+                <span>{settlementError}</span>
+                <button
+                  type="button"
+                  onClick={() => setSettlementError("")}
+                  aria-label="Dismiss settlement error"
+                  className="shrink-0 text-sm text-[#FCA5A5]/70 transition hover:text-[#FCA5A5]"
+                >
+                  ×
+                </button>
+              </div>
+            )}
+
             {explorerNotice && (
               <div role="status" className="border border-emerald-500/20 bg-emerald-950/40 px-3 py-2 text-[11px] text-[#D1FAE5]">
                 {explorerNotice}
@@ -502,8 +551,8 @@ export default function QueryVault({ providerAddress, onProviderAddressChange }:
                         </span>
                       </span>
                       <span className="text-right text-[10px] text-[#7D9187]">
-                        <span className="block">{formatNumber(vault.rows)} rows</span>
-                        <span className="mt-0.5 block">{vault.updated}</span>
+                        <span className="block text-[#34D399]">Earned {formatNearAmount(vault.earningsNear)}</span>
+                        <span className="mt-0.5 block">{formatNumber(vault.rows)} rows · {vault.updated}</span>
                       </span>
                     </span>
                   </button>
@@ -520,6 +569,9 @@ export default function QueryVault({ providerAddress, onProviderAddressChange }:
                 <div className="flex items-center gap-2">
                   <span className="border border-emerald-500/20 bg-[#0B0F17]/60 px-2 py-1 font-mono text-[10px] text-[#34D399]">
                     {selectedVault.priceNear} NEAR / query
+                  </span>
+                  <span className="hidden border border-emerald-500/20 px-2 py-1 font-mono text-[9px] text-[#A7B9B0] sm:inline">
+                    Publisher earned {formatNearAmount(selectedVault.earningsNear)}
                   </span>
                   <span className="hidden border border-emerald-500/20 px-2 py-1 text-[9px] uppercase tracking-[0.14em] text-[#A7B9B0] sm:inline">
                     No upload
@@ -612,11 +664,11 @@ export default function QueryVault({ providerAddress, onProviderAddressChange }:
                     </div>
                     <div className="border border-emerald-500/20 bg-[#0B0F17]/60 px-3 py-2">
                       <span className="block text-[#A7B9B0]">Query price</span>
-                      <span className="mt-1 block font-mono text-[#F0FDF4]">{answer.priceNear} NEAR · simulated</span>
+                      <span className="mt-1 block font-mono text-[#F0FDF4]">{answer.priceNear} NEAR · settled locally</span>
                     </div>
                   </div>
                   <p className="mt-3 text-[10px] leading-4 text-[#7D9187]">
-                    Local demo only. No network call, settlement, or real hardware attestation occurred.
+                    Local demo only. Balance settlement is simulated in this browser; no network call or real hardware attestation occurred.
                   </p>
                 </div>
               )}
