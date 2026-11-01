@@ -18,7 +18,7 @@ function TransactionLedger({ transactions }: { transactions: WalletTransaction[]
   }
 
   return (
-    <ul className="max-h-[260px] divide-y divide-white/[0.06] overflow-y-auto border-t border-emerald-500/20">
+    <ul className="max-h-[260px] divide-y divide-white/[0.06] overflow-y-auto overflow-x-hidden border-t border-emerald-500/20">
       {transactions.map((transaction) => {
         const isCredit = transaction.type === "FAUCET_CREDIT";
         return (
@@ -49,7 +49,7 @@ function TransactionLedger({ transactions }: { transactions: WalletTransaction[]
                 </div>
               </div>
             </div>
-            <span className={`shrink-0 font-mono text-[11px] ${isCredit ? "text-[#34D399]" : "text-[#FCA5A5]"}`}>
+            <span className={`shrink-0 whitespace-nowrap font-mono text-[11px] ${isCredit ? "text-[#34D399]" : "text-[#FCA5A5]"}`}>
               {transaction.amount}
             </span>
           </li>
@@ -103,7 +103,7 @@ export default function WalletSummary({ ledger, variant = "panel" }: WalletSumma
           <span className="shrink-0 font-mono text-[10px] font-medium text-[#34D399]">
             {formatNearAmount(ledger.balanceNear)}
           </span>
-          <span className="hidden max-w-[150px] truncate font-mono text-[10px] text-[#A7B9B0] sm:inline">
+          <span className="hidden max-w-[150px] truncate font-mono text-[10px] text-[#A7B9B0] xl:inline">
             {ledger.address}
           </span>
           <button
@@ -127,7 +127,7 @@ export default function WalletSummary({ ledger, variant = "panel" }: WalletSumma
           }`}
         >
           History
-          <span className="hidden border border-emerald-500/20 px-1 font-mono text-[9px] text-[#34D399] sm:inline">
+          <span className="hidden border border-emerald-500/20 px-1 font-mono text-[9px] text-[#34D399] lg:inline">
             {ledger.transactions.length}
           </span>
         </button>
@@ -157,29 +157,29 @@ export default function WalletSummary({ ledger, variant = "panel" }: WalletSumma
   }
 
   return (
-    <section className="border border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl">
-      <div className="flex flex-wrap items-start justify-between gap-3 px-4 py-3">
+    <section className="min-w-0 overflow-hidden border border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl">
+      <div className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <div className="text-[9px] uppercase tracking-[0.14em] text-[#7D9187]">Wallet balance</div>
           <div className="mt-1 flex flex-wrap items-baseline gap-2">
-            <span className="font-mono text-[20px] font-medium text-[#F0FDF4]">
+            <span className="font-mono text-[22px] font-medium text-[#F0FDF4]">
               {formatNearAmount(ledger.balanceNear)}
             </span>
             <span className="border border-emerald-500/20 bg-emerald-950/30 px-1.5 py-0.5 text-[8px] uppercase tracking-[0.14em] text-[#34D399]">
-              Test faucet
+              TESTNET FAUCET
             </span>
           </div>
-          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[10px] text-[#A7B9B0]">
-            <span className="max-w-[240px] truncate font-mono" title={ledger.address}>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-[#A7B9B0]">
+            <span className="break-all font-mono" title={ledger.address}>
               {ledger.address}
             </span>
             <button
               type="button"
               onClick={() => void handleCopyAddress()}
               aria-label={`Copy wallet address ${ledger.address}`}
-              className="border border-emerald-500/20 px-1.5 py-0.5 text-[9px] text-[#A7B9B0] transition hover:border-emerald-500/40 hover:text-[#34D399]"
+              className="shrink-0 border border-emerald-500/20 px-1.5 py-0.5 text-[9px] text-[#A7B9B0] transition hover:border-emerald-500/40 hover:text-[#34D399]"
             >
-              {copied ? "Copied" : "Copy address"}
+              {copied ? "Copied" : "Copy"}
             </button>
           </div>
         </div>
@@ -188,17 +188,19 @@ export default function WalletSummary({ ledger, variant = "panel" }: WalletSumma
           onClick={() => setHistoryOpen((current) => !current)}
           aria-expanded={historyOpen}
           aria-controls="panel-transaction-history"
-          className={`flex items-center gap-2 border px-2.5 py-1.5 text-[10px] transition ${
+          className={`flex w-full shrink-0 items-center justify-between gap-2 border px-2.5 py-2 text-[10px] transition sm:w-auto ${
             historyOpen
               ? "border-emerald-500/40 bg-emerald-950/40 text-[#F0FDF4]"
               : "border-emerald-500/20 text-[#A7B9B0] hover:border-emerald-500/40 hover:text-[#F0FDF4]"
           }`}
         >
-          Transaction history
-          <span className="border border-emerald-500/20 px-1 font-mono text-[9px] text-[#34D399]">
-            {ledger.transactions.length}
+          <span className="whitespace-nowrap">Transaction history</span>
+          <span className="flex items-center gap-2">
+            <span className="border border-emerald-500/20 px-1 font-mono text-[9px] text-[#34D399]">
+              {ledger.transactions.length}
+            </span>
+            <span aria-hidden="true">{historyOpen ? "↑" : "↓"}</span>
           </span>
-          <span aria-hidden="true">{historyOpen ? "↑" : "↓"}</span>
         </button>
       </div>
       {historyOpen && (

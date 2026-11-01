@@ -29,6 +29,7 @@ export default function Home() {
   const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
   const [walletError, setWalletError] = useState<string | null>(null);
   const [walletSuccessMessage, setWalletSuccessMessage] = useState("");
+  const [isMobileWalletOpen, setIsMobileWalletOpen] = useState(false);
   const [backupKey, setBackupKey] = useState<string | null>(null);
   const [backupKeyCopied, setBackupKeyCopied] = useState(false);
 
@@ -216,6 +217,7 @@ export default function Home() {
       setWalletSource(selectorState.connected ? "selector" : embeddedWallet ? "embedded" : null);
       setWalletLedger(connectedAccountId ? ensureWalletLedger(connectedAccountId) : null);
       setWalletSuccessMessage("");
+      setIsMobileWalletOpen(false);
     } catch (error) {
       setWalletError(error instanceof Error ? error.message : "Could not disconnect the wallet.");
     } finally {
@@ -225,7 +227,7 @@ export default function Home() {
 
   return (
     <div className="min-h-screen text-[#F0FDF4]">
-      <header className="border-b border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl">
+      <header className="relative border-b border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl">
         <div className="mx-auto flex h-[68px] max-w-[1500px] items-center justify-between px-5 sm:px-8">
           <a href="#home" className="flex items-center gap-3" aria-label="BlindSight home">
             <Image
@@ -243,41 +245,54 @@ export default function Home() {
           </a>
 
           <div className="flex items-center gap-2 sm:gap-4">
-            <div className="hidden items-center gap-2 text-[11px] text-[#A7B9B0] sm:flex">
+            <div className="hidden items-center gap-2 text-[11px] text-[#A7B9B0] xl:flex">
               <span className="size-1.5 rounded-full bg-emerald-500" />
               Query gateway preview
             </div>
-            <div className="h-5 w-px bg-[#047857]" />
+            <div className="hidden h-5 w-px bg-[#047857] sm:block" />
             <div
-              className="hidden items-center gap-2 border border-emerald-500/30 bg-emerald-950/40 px-2.5 py-1.5 text-[10px] text-emerald-400 md:flex"
+              className="hidden items-center gap-2 border border-emerald-500/30 bg-emerald-950/40 px-2.5 py-1.5 text-[10px] text-emerald-400 lg:flex"
               title="NEAR settlement is simulated in this prototype."
             >
               <span className="size-1.5 rounded-full bg-[#34D399]" />
               <span>NEAR testnet · preview</span>
             </div>
             {walletAccountId ? (
-              <div className="flex items-center gap-2">
-                <WalletSummary ledger={walletLedger} variant="header" />
+              <>
                 <button
                   type="button"
-                  onClick={() => void handleWalletDisconnect()}
-                  disabled={isWalletLoading}
-                  className="border border-emerald-500/20 px-2 py-2 text-[10px] text-[#A7B9B0] transition hover:border-[#F87171]/60 hover:text-[#FCA5A5] disabled:cursor-wait disabled:opacity-60"
-                  aria-label={`Disconnect wallet ${walletAccountId}`}
+                  onClick={() => setIsMobileWalletOpen((current) => !current)}
+                  aria-expanded={isMobileWalletOpen}
+                  aria-controls="mobile-wallet-drawer"
+                  aria-label={`Wallet balance ${walletLedger ? formatNearAmount(walletLedger.balanceNear) : "2.00 NEAR"}`}
+                  className="flex items-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-950/60 px-3 py-1.5 text-xs font-semibold text-emerald-400 transition hover:border-emerald-500/50 sm:hidden"
                 >
-                  Disconnect
+                  <span className="size-1.5 rounded-full bg-emerald-400" />
+                  {walletLedger ? formatNearAmount(walletLedger.balanceNear) : "2.00 NEAR"}
                 </button>
-                {walletSource === "embedded" && (
+                <div className="hidden items-center gap-2 sm:flex">
+                  <WalletSummary ledger={walletLedger} variant="header" />
                   <button
                     type="button"
-                    onClick={handleExportEmbeddedWallet}
-                    className="border border-emerald-500/30 bg-emerald-950/40 px-2 py-2 text-[10px] text-emerald-400 transition hover:border-emerald-500/40"
-                    aria-label="Export embedded wallet backup key"
+                    onClick={() => void handleWalletDisconnect()}
+                    disabled={isWalletLoading}
+                    className="border border-emerald-500/20 px-2 py-2 text-[10px] text-[#A7B9B0] transition hover:border-[#F87171]/60 hover:text-[#FCA5A5] disabled:cursor-wait disabled:opacity-60"
+                    aria-label={`Disconnect wallet ${walletAccountId}`}
                   >
-                    Export Key
+                    Disconnect
                   </button>
-                )}
-              </div>
+                  {walletSource === "embedded" && (
+                    <button
+                      type="button"
+                      onClick={handleExportEmbeddedWallet}
+                      className="border border-emerald-500/30 bg-emerald-950/40 px-2 py-2 text-[10px] text-emerald-400 transition hover:border-emerald-500/40"
+                      aria-label="Export embedded wallet backup key"
+                    >
+                      Export Key
+                    </button>
+                  )}
+                </div>
+              </>
             ) : (
               <button
                 type="button"
@@ -290,6 +305,47 @@ export default function Home() {
             )}
           </div>
         </div>
+
+        {walletAccountId && isMobileWalletOpen && (
+          <div
+            id="mobile-wallet-drawer"
+            className="absolute inset-x-4 top-[72px] z-50 sm:hidden"
+          >
+            <div className="rounded-xl border border-emerald-500/25 bg-[#0B0F17]/95 p-3 shadow-[0_24px_80px_rgba(0,0,0,0.65)] backdrop-blur-xl">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <span className="text-[10px] uppercase tracking-[0.14em] text-[#7D9187]">Wallet</span>
+                <button
+                  type="button"
+                  onClick={() => setIsMobileWalletOpen(false)}
+                  aria-label="Close wallet details"
+                  className="text-sm text-[#A7B9B0] transition hover:text-[#F0FDF4]"
+                >
+                  ×
+                </button>
+              </div>
+              <WalletSummary ledger={walletLedger} />
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleWalletDisconnect()}
+                  disabled={isWalletLoading}
+                  className="min-w-0 flex-1 border border-emerald-500/20 px-3 py-2 text-[11px] text-[#A7B9B0] transition hover:border-[#F87171]/60 hover:text-[#FCA5A5] disabled:cursor-wait disabled:opacity-60"
+                >
+                  Disconnect
+                </button>
+                {walletSource === "embedded" && (
+                  <button
+                    type="button"
+                    onClick={handleExportEmbeddedWallet}
+                    className="min-w-0 flex-1 border border-emerald-500/30 bg-emerald-950/40 px-3 py-2 text-[11px] text-emerald-400 transition hover:border-emerald-500/40"
+                  >
+                    Export Key
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </header>
 
       <main id="home" className="mx-auto max-w-[1420px] px-5 pb-12 pt-9 sm:px-8 sm:pt-12">
@@ -303,9 +359,6 @@ export default function Home() {
             </h1>
             <p className="mt-5 max-w-[540px] text-[14px] leading-6 text-[#A7B9B0]">
               Ask for the insight you need. Keep the source on your side.
-              <span className="mt-2 block text-[12px] text-[#7D9187]">
-                Prototype note: marketplace answers are simulated locally; enclave and settlement steps are not real.
-              </span>
             </p>
           </div>
           <div aria-hidden="true" className="hidden min-h-[150px] items-end justify-end lg:flex">
