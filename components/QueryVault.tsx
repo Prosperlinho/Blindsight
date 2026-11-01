@@ -9,13 +9,25 @@ import {
   type FormEvent,
 } from "react";
 import WalletSummary from "@/components/WalletSummary";
-import { formatNearAmount, roundNear, type QuerySettlementResult, type WalletLedger } from "@/lib/embeddedWallet";
+import {
+  ACCOUNTS_LEDGER_EVENT,
+  INITIAL_TEST_BALANCE_NEAR,
+  formatNearAmount,
+  loadAccountsLedger,
+  normalizeAccountAddress,
+  roundNear,
+  saveAccountsLedger,
+  seedAccountEarnings,
+  type AccountsLedger,
+  type QuerySettlementResult,
+  type WalletLedger,
+} from "@/lib/embeddedWallet";
 
 type QueryVaultProps = {
   providerAddress: string;
   onProviderAddressChange: (address: string) => void;
   walletLedger: WalletLedger | null;
-  onSettleQuery: (priceNear: number, vaultTitle: string) => QuerySettlementResult;
+  onSettleQuery: (priceNear: number, vaultTitle: string, publisherAddress: string) => QuerySettlementResult;
   onOpenDeposit: () => void;
   onOpenWithdraw: () => void;
 };
@@ -241,6 +253,7 @@ export default function QueryVault({
   const [settlementError, setSettlementError] = useState("");
   const [publisherNotice, setPublisherNotice] = useState("");
   const [auditLog, setAuditLog] = useState<AuditLogEntry[]>([]);
+  const [accountsLedger, setAccountsLedger] = useState<AccountsLedger>({});
 
   const [draftFiles, setDraftFiles] = useState<DraftFile[]>([]);
   const [draftTitle, setDraftTitle] = useState("");
@@ -257,6 +270,33 @@ export default function QueryVault({
     if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
   }, []);
 
+  useEffect(() => {
+    const accounts = loadAccountsLedger();
+    let changed = false;
+    for (const vault of INITIAL_VAULTS) {
+      const seeded = seedAccountEarnings(accounts, vault.seller, vault.earningsNear);
+      if (seeded.changed) changed = true;
+    }
+    if (changed) saveAccountsLedger(accounts);
+    const timer = window.setTimeout(() => setAccountsLedger(accounts), 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!walletLedger) return;
+    const key = normalizeAccountAddress(walletLedger.accountId);
+    const timer = window.setTimeout(() => {
+      setAccountsLedger((current) => ({ ...current, [key]: walletLedger }));
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [walletLedger]);
+
+  useEffect(() => {
+    const refreshAccounts = () => setAccountsLedger(loadAccountsLedger());
+    window.addEventListener(ACCOUNTS_LEDGER_EVENT, refreshAccounts);
+    return () => window.removeEventListener(ACCOUNTS_LEDGER_EVENT, refreshAccounts);
+  }, []);
+
   const selectedVault = vaults.find((vault) => vault.id === selectedVaultId) ?? vaults[0];
   const publisherKey = (providerAddress.trim() || "you.near").toLowerCase();
   const myVaults = vaults.filter((vault) => vault.seller.trim().toLowerCase() === publisherKey);
@@ -265,6 +305,12 @@ export default function QueryVault({
     && draftTitle.trim().length > 0
     && Number.isFinite(parsedPrice)
     && parsedPrice > 0;
+
+  function publisherEarnings(address: string): number {
+    const account = accountsLedger[normalizeAccountAddress(address)];
+    if (!account) return 0;
+    return Math.max(0, roundNear(account.balanceNear - INITIAL_TEST_BALANCE_NEAR));
+  }
 
   function handleSelectVault(vaultId: string) {
     if (vaultId === selectedVaultId) return;
@@ -288,7 +334,7 @@ export default function QueryVault({
 
     const vault = selectedVault;
     const priceNear = Number(vault.priceNear);
-    const settlement = onSettleQuery(priceNear, vault.title);
+    const settlement = onSettleQuery(priceNear, vault.title, vault.seller);
     if (!settlement.success) {
       setSettlementError(settlement.message ?? "The query could not be settled. Check your wallet balance.");
       return;
@@ -300,11 +346,6 @@ export default function QueryVault({
     setAnswer(null);
     setExplorerNotice("");
     setSettlementError("");
-    setVaults((current) => current.map((entry) => (
-      entry.id === vault.id
-        ? { ...entry, earningsNear: roundNear(entry.earningsNear + priceNear) }
-        : entry
-    )));
 
     if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
     timeoutRef.current = window.setTimeout(() => {
@@ -599,7 +640,7 @@ export default function QueryVault({
                         </span>
                       </span>
                       <span className="text-right text-[10px] text-[#7D9187]">
-                        <span className="block text-[#34D399]">Earned {formatNearAmount(vault.earningsNear)}</span>
+                        <span className="block text-[#34D399]">Earned {formatNearAmount(publisherEarnings(vault.seller))}</span>
                         <span className="mt-0.5 block">{formatNumber(vault.rows)} rows · {vault.updated}</span>
                       </span>
                     </span>
@@ -619,7 +660,7 @@ export default function QueryVault({
                     {selectedVault.priceNear} NEAR / query
                   </span>
                   <span className="hidden border border-emerald-500/20 px-2 py-1 font-mono text-[9px] text-[#A7B9B0] sm:inline">
-                    Publisher earned {formatNearAmount(selectedVault.earningsNear)}
+                    Publisher earned {formatNearAmount(publisherEarnings(selectedVault.seller))}
                   </span>
                   <span className="hidden border border-emerald-500/20 px-2 py-1 text-[9px] uppercase tracking-[0.14em] text-[#A7B9B0] sm:inline">
                     No upload
@@ -777,7 +818,7 @@ export default function QueryVault({
                         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-[#7D9187]">
                           <span className="font-mono text-[#34D399]">{vault.priceNear} NEAR / query</span>
                           <span>{vault.rows.toLocaleString("en-US")} rows</span>
-                          <span>Earned {formatNearAmount(vault.earningsNear)}</span>
+                          <span>Earned {formatNearAmount(publisherEarnings(vault.seller))}</span>
                         </div>
                       </div>
                       <button

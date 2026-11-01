@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Image from "next/image";
 import ConnectModal from "@/components/ConnectModal";
+import ExportKeyModal from "@/components/ExportKeyModal";
 import QueryVault from "@/components/QueryVault";
 import WalletDepositModal from "@/components/WalletDepositModal";
 import WalletSummary from "@/components/WalletSummary";
@@ -10,8 +11,6 @@ import WalletWithdrawModal from "@/components/WalletWithdrawModal";
 import {
   createDeposit,
   createInstantWallet as generateEmbeddedWallet,
-  createQueryDebit,
-  createWithdrawal,
   disconnectEmbeddedWallet,
   ensureWalletLedger,
   exportPrivateKey as getEmbeddedPrivateKey,
@@ -20,6 +19,8 @@ import {
   importPrivateKey as importEmbeddedPrivateKey,
   roundNear,
   saveWalletLedger,
+  sendNear,
+  settleQueryPayment,
   type QuerySettlementResult,
   type WalletLedger,
 } from "@/lib/embeddedWallet";
@@ -36,8 +37,7 @@ export default function Home() {
   const [walletSuccessMessage, setWalletSuccessMessage] = useState("");
   const [isMobileWalletOpen, setIsMobileWalletOpen] = useState(false);
   const [walletModal, setWalletModal] = useState<"deposit" | "withdraw" | null>(null);
-  const [backupKey, setBackupKey] = useState<string | null>(null);
-  const [backupKeyCopied, setBackupKeyCopied] = useState(false);
+  const [isExportKeyOpen, setIsExportKeyOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -109,13 +109,13 @@ export default function Home() {
     };
   }, []);
 
-  function handleSettleQuery(priceNear: number, vaultTitle: string): QuerySettlementResult {
+  function handleSettleQuery(priceNear: number, vaultTitle: string, publisherAddress: string): QuerySettlementResult {
     if (!walletAccountId) {
       return { success: false, message: "Connect a wallet to settle this query." };
     }
 
     const baseLedger = walletLedger ?? ensureWalletLedger(walletAccountId);
-    const settlement = createQueryDebit(baseLedger, priceNear, vaultTitle);
+    const settlement = settleQueryPayment(baseLedger, priceNear, vaultTitle, publisherAddress);
     if (!settlement) {
       return {
         success: false,
@@ -123,9 +123,8 @@ export default function Home() {
       };
     }
 
-    saveWalletLedger(settlement.ledger);
-    setWalletLedger(settlement.ledger);
-    return { success: true, transactionId: settlement.transaction.id };
+    setWalletLedger(settlement.senderLedger);
+    return { success: true, transactionId: settlement.senderTransaction.id };
   }
 
   function handleOpenWalletAction(action: "deposit" | "withdraw") {
@@ -157,8 +156,15 @@ export default function Home() {
 
     const baseLedger = walletLedger ?? ensureWalletLedger(walletAccountId);
     const amount = roundNear(amountNear);
+    const destination = recipient.trim();
     if (!Number.isFinite(amount) || amount <= 0) {
       return { success: false, message: "Enter an amount greater than 0." };
+    }
+    if (!destination) {
+      return { success: false, message: "Enter a recipient NEAR address." };
+    }
+    if (destination.toLowerCase() === walletAccountId.trim().toLowerCase()) {
+      return { success: false, message: "Choose a recipient address different from your own wallet." };
     }
     if (amount > baseLedger.balanceNear + 1e-9) {
       return {
@@ -167,15 +173,14 @@ export default function Home() {
       };
     }
 
-    const withdrawal = createWithdrawal(baseLedger, amount, recipient);
-    if (!withdrawal) {
+    const transfer = sendNear(baseLedger, destination, amount);
+    if (!transfer) {
       return { success: false, message: "Enter a valid recipient address and amount." };
     }
 
-    saveWalletLedger(withdrawal.ledger);
-    setWalletLedger(withdrawal.ledger);
-    setWalletSuccessMessage(`Sent ${formatNearAmount(amount)} to ${recipient.trim()}. New balance: ${formatNearAmount(withdrawal.ledger.balanceNear)}.`);
-    return { success: true, transactionId: withdrawal.transaction.id };
+    setWalletLedger(transfer.senderLedger);
+    setWalletSuccessMessage(`Sent ${formatNearAmount(amount)} to ${destination}. Recipient credited: ${formatNearAmount(transfer.recipientLedger.balanceNear)} balance. Your new balance: ${formatNearAmount(transfer.senderLedger.balanceNear)}.`);
+    return { success: true, transactionId: transfer.senderTransaction.id };
   }
 
   function handleWalletConnect() {
@@ -217,28 +222,10 @@ export default function Home() {
     }
   }
 
-  function handleExportEmbeddedWallet() {
+  function handleOpenExportKey() {
     setWalletError(null);
-    try {
-      const privateKey = getEmbeddedPrivateKey();
-      if (!privateKey) {
-        throw new Error("No embedded wallet key was found in this browser.");
-      }
-      setBackupKey(privateKey);
-      setBackupKeyCopied(false);
-    } catch (error) {
-      setWalletError(error instanceof Error ? error.message : "Could not export the embedded wallet key.");
-    }
-  }
-
-  async function handleCopyBackupKey() {
-    if (!backupKey) return;
-    try {
-      await navigator.clipboard.writeText(backupKey);
-      setBackupKeyCopied(true);
-    } catch (error) {
-      setWalletError(error instanceof Error ? error.message : "Could not copy the backup key.");
-    }
+    setIsMobileWalletOpen(false);
+    setIsExportKeyOpen(true);
   }
 
   async function handleExistingWalletConnect() {
@@ -340,7 +327,7 @@ export default function Home() {
                   {walletSource === "embedded" && (
                     <button
                       type="button"
-                      onClick={handleExportEmbeddedWallet}
+                      onClick={handleOpenExportKey}
                       className="border border-emerald-500/30 bg-emerald-950/40 px-2 py-2 text-[10px] text-emerald-400 transition hover:border-emerald-500/40"
                       aria-label="Export embedded wallet backup key"
                     >
@@ -396,7 +383,7 @@ export default function Home() {
                 {walletSource === "embedded" && (
                   <button
                     type="button"
-                    onClick={handleExportEmbeddedWallet}
+                    onClick={handleOpenExportKey}
                     className="min-w-0 flex-1 border border-emerald-500/30 bg-emerald-950/40 px-3 py-2 text-[11px] text-emerald-400 transition hover:border-emerald-500/40"
                   >
                     Export Key
@@ -491,57 +478,14 @@ export default function Home() {
           </div>
         </div>
       )}
-      {backupKey && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-md"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setBackupKey(null);
-          }}
-        >
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="backup-key-title"
-            className="relative w-full max-w-[520px] border border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl p-5 shadow-[0_24px_100px_rgba(0,0,0,0.65)] sm:p-7"
-          >
-            <button
-              type="button"
-              onClick={() => setBackupKey(null)}
-              aria-label="Close backup key dialog"
-              className="absolute right-4 top-4 grid size-8 place-items-center border border-emerald-500/20 text-[#A7B9B0] transition hover:border-[#34D399] hover:text-[#F0FDF4]"
-            >
-              ×
-            </button>
-            <h2 id="backup-key-title" className="pr-10 font-serif text-xl font-medium text-[#F0FDF4]">
-              Export Backup Key
-            </h2>
-            <p className="mt-2 text-xs leading-5 text-[#A7B9B0]">
-              Import this key in another browser to access the same implicit account.
-            </p>
-            <div className="mt-5 border border-[#F59E0B]/60 bg-[#241C0E] p-3 text-xs leading-5 text-[#FDE68A]">
-              Anyone with this private key can control your wallet. Store it securely and never share it.
-            </div>
-            <textarea
-              readOnly
-              aria-label="Embedded wallet private key"
-              value={backupKey}
-              onFocus={(event) => event.currentTarget.select()}
-              className="mt-4 min-h-20 w-full resize-none border border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl p-3 font-mono text-xs leading-5 text-[#E2F8EC] outline-none focus:border-[#10B981]/60"
-            />
-            <div className="mt-3 flex items-center justify-between gap-3">
-              <span role="status" className="text-xs text-[#10B981]">
-                {backupKeyCopied ? "Backup key copied." : ""}
-              </span>
-              <button
-                type="button"
-                onClick={() => void handleCopyBackupKey()}
-                className="bg-emerald-500 px-4 py-2 text-[11px] font-semibold text-slate-950 shadow-lg shadow-emerald-500/20 transition-all hover:bg-emerald-400"
-              >
-                Copy key
-              </button>
-            </div>
-          </section>
-        </div>
+      {isExportKeyOpen && (
+        <ExportKeyModal
+          open
+          accountId={walletAccountId ?? ""}
+          onClose={() => setIsExportKeyOpen(false)}
+          getPrivateKey={getEmbeddedPrivateKey}
+          onError={setWalletError}
+        />
       )}
       {walletModal === "deposit" && walletLedger && (
         <WalletDepositModal
