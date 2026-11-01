@@ -16,6 +16,8 @@ type QueryVaultProps = {
   onProviderAddressChange: (address: string) => void;
   walletLedger: WalletLedger | null;
   onSettleQuery: (priceNear: number, vaultTitle: string) => QuerySettlementResult;
+  onOpenDeposit: () => void;
+  onOpenWithdraw: () => void;
 };
 
 type ViewTab = "explorer" | "publisher";
@@ -45,6 +47,12 @@ type VaultAnswer = {
   priceNear: string;
   insight: string;
   attestationToken: string;
+};
+
+type AuditLogEntry = {
+  id: string;
+  message: string;
+  timestamp: string;
 };
 
 const INITIAL_VAULTS: MarketplaceVault[] = [
@@ -220,6 +228,8 @@ export default function QueryVault({
   onProviderAddressChange,
   walletLedger,
   onSettleQuery,
+  onOpenDeposit,
+  onOpenWithdraw,
 }: QueryVaultProps) {
   const [activeTab, setActiveTab] = useState<ViewTab>("explorer");
   const [vaults, setVaults] = useState<MarketplaceVault[]>(INITIAL_VAULTS);
@@ -229,6 +239,8 @@ export default function QueryVault({
   const [answer, setAnswer] = useState<VaultAnswer | null>(null);
   const [explorerNotice, setExplorerNotice] = useState("");
   const [settlementError, setSettlementError] = useState("");
+  const [publisherNotice, setPublisherNotice] = useState("");
+  const [auditLog, setAuditLog] = useState<AuditLogEntry[]>([]);
 
   const [draftFiles, setDraftFiles] = useState<DraftFile[]>([]);
   const [draftTitle, setDraftTitle] = useState("");
@@ -246,6 +258,8 @@ export default function QueryVault({
   }, []);
 
   const selectedVault = vaults.find((vault) => vault.id === selectedVaultId) ?? vaults[0];
+  const publisherKey = (providerAddress.trim() || "you.near").toLowerCase();
+  const myVaults = vaults.filter((vault) => vault.seller.trim().toLowerCase() === publisherKey);
   const parsedPrice = Number(draftPrice);
   const canPublish = draftFiles.length > 0
     && draftTitle.trim().length > 0
@@ -304,6 +318,36 @@ export default function QueryVault({
       setIsExecuting(false);
       timeoutRef.current = null;
     }, 480);
+  }
+
+  function handleUnpublish(vaultId: string) {
+    const vault = vaults.find((entry) => entry.id === vaultId);
+    if (!vault) return;
+
+    const remaining = vaults.filter((entry) => entry.id !== vaultId);
+    setVaults(remaining);
+    setAuditLog((current) => [
+      {
+        id: window.crypto.randomUUID(),
+        message: `${vault.title} withdrawn from enclave marketplace`,
+        timestamp: "Just now",
+      },
+      ...current,
+    ]);
+    setPublisherNotice(`"${vault.title}" was removed. Buyers can no longer query it.`);
+
+    if (selectedVaultId === vaultId) {
+      if (timeoutRef.current !== null) {
+        window.clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+      runIdRef.current += 1;
+      setSelectedVaultId(remaining[0]?.id ?? "");
+      setQuery("");
+      setAnswer(null);
+      setIsExecuting(false);
+      setSettlementError("");
+    }
   }
 
   async function addDraftFiles(selectedFiles: FileList | File[]) {
@@ -468,7 +512,11 @@ export default function QueryVault({
             aria-labelledby="explorer-tab"
             className="space-y-4"
           >
-            <WalletSummary ledger={walletLedger} />
+            <WalletSummary
+              ledger={walletLedger}
+              onDepositClick={onOpenDeposit}
+              onWithdrawClick={onOpenWithdraw}
+            />
 
             {settlementError && (
               <div
@@ -700,6 +748,52 @@ export default function QueryVault({
               </div>
             )}
 
+            {publisherNotice && (
+              <div role="status" className="border border-[#FCA5A5]/25 bg-[#261719] px-3 py-2 text-[11px] text-[#FCA5A5]">
+                {publisherNotice}
+              </div>
+            )}
+
+            <div className="border border-emerald-500/20 bg-[#0B0F17]/50">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-500/20 px-3 py-2.5">
+                <h4 className="text-[11px] uppercase tracking-[0.14em] text-[#A7B9B0]">
+                  My published vaults
+                </h4>
+                <span className="border border-emerald-500/20 px-1.5 py-0.5 font-mono text-[9px] text-[#34D399]">
+                  {myVaults.length}
+                </span>
+              </div>
+
+              {myVaults.length === 0 ? (
+                <p className="px-3 py-4 text-[11px] leading-5 text-[#7D9187]">
+                  You have no live vaults. Publish below to list a dataset in the enclave marketplace.
+                </p>
+              ) : (
+                <ul className="divide-y divide-white/[0.06]">
+                  {myVaults.map((vault) => (
+                    <li key={vault.id} className="flex flex-col gap-3 px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="truncate text-[12px] font-medium text-[#F0FDF4]">{vault.title}</div>
+                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-[#7D9187]">
+                          <span className="font-mono text-[#34D399]">{vault.priceNear} NEAR / query</span>
+                          <span>{vault.rows.toLocaleString("en-US")} rows</span>
+                          <span>Earned {formatNearAmount(vault.earningsNear)}</span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleUnpublish(vault.id)}
+                        className="w-full shrink-0 border border-[#F87171]/40 bg-[#F87171]/10 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#FCA5A5] transition hover:border-[#F87171] hover:bg-[#F87171]/20 sm:w-auto"
+                        aria-label={`Unpublish vault ${vault.title}`}
+                      >
+                        Unpublish / Remove Vault
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
             <form onSubmit={handlePublish} className="space-y-4">
               <div>
                 <span className="mb-2 block text-[11px] text-[#A7B9B0]">Dataset files</span>
@@ -836,6 +930,30 @@ export default function QueryVault({
                 Publishing is local to this demo. No data or funds leave the browser.
               </p>
             </form>
+
+            <div className="border border-emerald-500/20 bg-[#0B0F17]/50">
+              <div className="border-b border-emerald-500/20 px-3 py-2.5">
+                <h4 className="text-[11px] uppercase tracking-[0.14em] text-[#A7B9B0]">
+                  Enclave audit log
+                </h4>
+              </div>
+              {auditLog.length === 0 ? (
+                <p className="px-3 py-4 text-[11px] leading-5 text-[#7D9187]">
+                  No marketplace changes yet. Withdrawing a vault records an entry here.
+                </p>
+              ) : (
+                <ul className="divide-y divide-white/[0.06]">
+                  {auditLog.map((entry) => (
+                    <li key={entry.id} className="flex flex-col gap-1 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+                      <span className="min-w-0 text-[11px] leading-5 text-[#D1FAE5]">{entry.message}</span>
+                      <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.12em] text-[#7D9187]">
+                        {entry.timestamp}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </div>
         )}
       </div>

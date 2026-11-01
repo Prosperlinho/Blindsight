@@ -6,6 +6,8 @@ import { formatNearAmount, type WalletLedger, type WalletTransaction } from "@/l
 type WalletSummaryProps = {
   ledger: WalletLedger | null;
   variant?: "header" | "panel";
+  onDepositClick?: () => void;
+  onWithdrawClick?: () => void;
 };
 
 function TransactionLedger({ transactions }: { transactions: WalletTransaction[] }) {
@@ -20,7 +22,7 @@ function TransactionLedger({ transactions }: { transactions: WalletTransaction[]
   return (
     <ul className="max-h-[260px] divide-y divide-white/[0.06] overflow-y-auto overflow-x-hidden border-t border-emerald-500/20">
       {transactions.map((transaction) => {
-        const isCredit = transaction.type === "FAUCET_CREDIT";
+        const isCredit = transaction.type === "FAUCET_CREDIT" || transaction.type === "DEPOSIT_CREDIT";
         return (
           <li key={transaction.id} className="flex items-start justify-between gap-3 px-4 py-2.5">
             <div className="flex min-w-0 items-start gap-2.5">
@@ -59,7 +61,12 @@ function TransactionLedger({ transactions }: { transactions: WalletTransaction[]
   );
 }
 
-export default function WalletSummary({ ledger, variant = "panel" }: WalletSummaryProps) {
+export default function WalletSummary({
+  ledger,
+  variant = "panel",
+  onDepositClick,
+  onWithdrawClick,
+}: WalletSummaryProps) {
   const [copied, setCopied] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const timeoutRef = useRef<number | null>(null);
@@ -183,25 +190,47 @@ export default function WalletSummary({ ledger, variant = "panel" }: WalletSumma
             </button>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => setHistoryOpen((current) => !current)}
-          aria-expanded={historyOpen}
-          aria-controls="panel-transaction-history"
-          className={`flex w-full shrink-0 items-center justify-between gap-2 border px-2.5 py-2 text-[10px] transition sm:w-auto ${
-            historyOpen
-              ? "border-emerald-500/40 bg-emerald-950/40 text-[#F0FDF4]"
-              : "border-emerald-500/20 text-[#A7B9B0] hover:border-emerald-500/40 hover:text-[#F0FDF4]"
-          }`}
-        >
-          <span className="whitespace-nowrap">Transaction history</span>
-          <span className="flex items-center gap-2">
-            <span className="border border-emerald-500/20 px-1 font-mono text-[9px] text-[#34D399]">
-              {ledger.transactions.length}
+        <div className="flex w-full shrink-0 flex-col gap-2 sm:w-auto">
+          <div className="grid grid-cols-2 gap-2">
+            {onDepositClick && (
+              <button
+                type="button"
+                onClick={onDepositClick}
+                className="flex h-9 items-center justify-center whitespace-nowrap bg-emerald-500 px-3 text-[10px] font-semibold text-slate-950 shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-400"
+              >
+                Deposit NEAR
+              </button>
+            )}
+            {onWithdrawClick && (
+              <button
+                type="button"
+                onClick={onWithdrawClick}
+                className="flex h-9 items-center justify-center whitespace-nowrap border border-emerald-500/30 bg-emerald-950/40 px-3 text-[10px] font-semibold text-emerald-400 transition hover:border-emerald-500/50"
+              >
+                Withdraw / Send
+              </button>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setHistoryOpen((current) => !current)}
+            aria-expanded={historyOpen}
+            aria-controls="panel-transaction-history"
+            className={`flex w-full items-center justify-between gap-2 border px-2.5 py-2 text-[10px] transition ${
+              historyOpen
+                ? "border-emerald-500/40 bg-emerald-950/40 text-[#F0FDF4]"
+                : "border-emerald-500/20 text-[#A7B9B0] hover:border-emerald-500/40 hover:text-[#F0FDF4]"
+            }`}
+          >
+            <span className="whitespace-nowrap">Transaction history</span>
+            <span className="flex items-center gap-2">
+              <span className="border border-emerald-500/20 px-1 font-mono text-[9px] text-[#34D399]">
+                {ledger.transactions.length}
+              </span>
+              <span aria-hidden="true">{historyOpen ? "↑" : "↓"}</span>
             </span>
-            <span aria-hidden="true">{historyOpen ? "↑" : "↓"}</span>
-          </span>
-        </button>
+          </button>
+        </div>
       </div>
       {historyOpen && (
         <div id="panel-transaction-history" role="region" aria-label="Transaction history">

@@ -4,16 +4,21 @@ import { useEffect, useState } from "react";
 import Image from "next/image";
 import ConnectModal from "@/components/ConnectModal";
 import QueryVault from "@/components/QueryVault";
+import WalletDepositModal from "@/components/WalletDepositModal";
 import WalletSummary from "@/components/WalletSummary";
+import WalletWithdrawModal from "@/components/WalletWithdrawModal";
 import {
+  createDeposit,
   createInstantWallet as generateEmbeddedWallet,
   createQueryDebit,
+  createWithdrawal,
   disconnectEmbeddedWallet,
   ensureWalletLedger,
   exportPrivateKey as getEmbeddedPrivateKey,
   formatNearAmount,
   getStoredEmbeddedWallet,
   importPrivateKey as importEmbeddedPrivateKey,
+  roundNear,
   saveWalletLedger,
   type QuerySettlementResult,
   type WalletLedger,
@@ -30,6 +35,7 @@ export default function Home() {
   const [walletError, setWalletError] = useState<string | null>(null);
   const [walletSuccessMessage, setWalletSuccessMessage] = useState("");
   const [isMobileWalletOpen, setIsMobileWalletOpen] = useState(false);
+  const [walletModal, setWalletModal] = useState<"deposit" | "withdraw" | null>(null);
   const [backupKey, setBackupKey] = useState<string | null>(null);
   const [backupKeyCopied, setBackupKeyCopied] = useState(false);
 
@@ -120,6 +126,56 @@ export default function Home() {
     saveWalletLedger(settlement.ledger);
     setWalletLedger(settlement.ledger);
     return { success: true, transactionId: settlement.transaction.id };
+  }
+
+  function handleOpenWalletAction(action: "deposit" | "withdraw") {
+    setIsMobileWalletOpen(false);
+    setWalletModal(action);
+  }
+
+  function handleDeposit(amountNear: number): QuerySettlementResult {
+    if (!walletAccountId) {
+      return { success: false, message: "Connect a wallet before depositing." };
+    }
+
+    const baseLedger = walletLedger ?? ensureWalletLedger(walletAccountId);
+    const deposit = createDeposit(baseLedger, amountNear);
+    if (!deposit) {
+      return { success: false, message: "Enter a valid deposit amount." };
+    }
+
+    saveWalletLedger(deposit.ledger);
+    setWalletLedger(deposit.ledger);
+    setWalletSuccessMessage(`Deposited ${formatNearAmount(amountNear)}. New balance: ${formatNearAmount(deposit.ledger.balanceNear)}.`);
+    return { success: true, transactionId: deposit.transaction.id };
+  }
+
+  function handleWithdraw(recipient: string, amountNear: number): QuerySettlementResult {
+    if (!walletAccountId) {
+      return { success: false, message: "Connect a wallet before sending funds." };
+    }
+
+    const baseLedger = walletLedger ?? ensureWalletLedger(walletAccountId);
+    const amount = roundNear(amountNear);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return { success: false, message: "Enter an amount greater than 0." };
+    }
+    if (amount > baseLedger.balanceNear + 1e-9) {
+      return {
+        success: false,
+        message: `Amount exceeds your available balance of ${formatNearAmount(baseLedger.balanceNear)}.`,
+      };
+    }
+
+    const withdrawal = createWithdrawal(baseLedger, amount, recipient);
+    if (!withdrawal) {
+      return { success: false, message: "Enter a valid recipient address and amount." };
+    }
+
+    saveWalletLedger(withdrawal.ledger);
+    setWalletLedger(withdrawal.ledger);
+    setWalletSuccessMessage(`Sent ${formatNearAmount(amount)} to ${recipient.trim()}. New balance: ${formatNearAmount(withdrawal.ledger.balanceNear)}.`);
+    return { success: true, transactionId: withdrawal.transaction.id };
   }
 
   function handleWalletConnect() {
@@ -323,7 +379,11 @@ export default function Home() {
                   ×
                 </button>
               </div>
-              <WalletSummary ledger={walletLedger} />
+              <WalletSummary
+                ledger={walletLedger}
+                onDepositClick={() => handleOpenWalletAction("deposit")}
+                onWithdrawClick={() => handleOpenWalletAction("withdraw")}
+              />
               <div className="mt-3 flex flex-wrap gap-2">
                 <button
                   type="button"
@@ -384,6 +444,8 @@ export default function Home() {
           onProviderAddressChange={setProviderAddress}
           walletLedger={walletLedger}
           onSettleQuery={handleSettleQuery}
+          onOpenDeposit={() => handleOpenWalletAction("deposit")}
+          onOpenWithdraw={() => handleOpenWalletAction("withdraw")}
         />
 
         <footer className="mt-7 flex flex-col gap-3 border-t border-emerald-500/20 pt-4 text-[10px] text-[#7D9187] sm:flex-row sm:items-center sm:justify-between">
@@ -480,6 +542,20 @@ export default function Home() {
             </div>
           </section>
         </div>
+      )}
+      {walletModal === "deposit" && walletLedger && (
+        <WalletDepositModal
+          ledger={walletLedger}
+          onClose={() => setWalletModal(null)}
+          onDeposit={handleDeposit}
+        />
+      )}
+      {walletModal === "withdraw" && walletLedger && (
+        <WalletWithdrawModal
+          ledger={walletLedger}
+          onClose={() => setWalletModal(null)}
+          onWithdraw={handleWithdraw}
+        />
       )}
       <ConnectModal
         open={isConnectModalOpen}

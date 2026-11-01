@@ -89,7 +89,11 @@ export function disconnectEmbeddedWallet() {
   window.localStorage.removeItem(ACCOUNT_ID_STORAGE_KEY);
 }
 
-export type WalletTransactionType = "FAUCET_CREDIT" | "QUERY_DEBIT";
+export type WalletTransactionType =
+  | "FAUCET_CREDIT"
+  | "DEPOSIT_CREDIT"
+  | "QUERY_DEBIT"
+  | "WITHDRAWAL_DEBIT";
 export type WalletTransactionStatus = "SUCCESS" | "CONFIRMED";
 
 export type WalletTransaction = {
@@ -162,7 +166,12 @@ function isWalletTransaction(value: unknown): value is WalletTransaction {
   if (!value || typeof value !== "object") return false;
   const transaction = value as Partial<WalletTransaction>;
   return typeof transaction.id === "string"
-    && (transaction.type === "FAUCET_CREDIT" || transaction.type === "QUERY_DEBIT")
+    && (
+      transaction.type === "FAUCET_CREDIT"
+      || transaction.type === "DEPOSIT_CREDIT"
+      || transaction.type === "QUERY_DEBIT"
+      || transaction.type === "WITHDRAWAL_DEBIT"
+    )
     && typeof transaction.amount === "string"
     && typeof transaction.description === "string"
     && (transaction.recipient === undefined || typeof transaction.recipient === "string")
@@ -235,6 +244,62 @@ export function createQueryDebit(
     amount: `-${amount.toFixed(2)} NEAR`,
     description: `Query fee for ${vaultTitle}`,
     recipient: "Publisher Vault",
+    status: "CONFIRMED",
+    timestamp: "Just now",
+  };
+
+  return {
+    transaction,
+    ledger: {
+      ...ledger,
+      balanceNear: roundNear(ledger.balanceNear - amount),
+      transactions: [transaction, ...ledger.transactions],
+    },
+  };
+}
+
+export function createDeposit(
+  ledger: WalletLedger,
+  amountNear: number,
+): { ledger: WalletLedger; transaction: WalletTransaction } | null {
+  const amount = roundNear(amountNear);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+
+  const transaction: WalletTransaction = {
+    id: `tx-deposit-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    type: "DEPOSIT_CREDIT",
+    amount: `+${amount.toFixed(2)} NEAR`,
+    description: "Testnet faucet top-up",
+    status: "SUCCESS",
+    timestamp: "Just now",
+  };
+
+  return {
+    transaction,
+    ledger: {
+      ...ledger,
+      balanceNear: roundNear(ledger.balanceNear + amount),
+      transactions: [transaction, ...ledger.transactions],
+    },
+  };
+}
+
+export function createWithdrawal(
+  ledger: WalletLedger,
+  amountNear: number,
+  recipient: string,
+): { ledger: WalletLedger; transaction: WalletTransaction } | null {
+  const amount = roundNear(amountNear);
+  const destination = recipient.trim();
+  if (!destination || !Number.isFinite(amount) || amount <= 0) return null;
+  if (ledger.balanceNear + 1e-9 < amount) return null;
+
+  const transaction: WalletTransaction = {
+    id: `tx-withdraw-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    type: "WITHDRAWAL_DEBIT",
+    amount: `-${amount.toFixed(2)} NEAR`,
+    description: `Transferred to ${destination}`,
+    recipient: destination,
     status: "CONFIRMED",
     timestamp: "Just now",
   };
