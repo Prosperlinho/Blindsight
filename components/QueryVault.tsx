@@ -1,6 +1,13 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type DragEvent,
+  type FormEvent,
+} from "react";
 
 type QueryVaultProps = {
   fileCount: number;
@@ -22,341 +29,788 @@ type QueryVaultProps = {
   onRunQuery: (query: string) => Promise<boolean>;
 };
 
-const PIPELINE_STEPS = [
+type ViewTab = "marketplace" | "monetize";
+
+type MarketplaceVault = {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
+  seller: string;
+  priceNear: string;
+  rows: number;
+  updated: string;
+  dataset: string;
+};
+
+type DraftFile = {
+  id: string;
+  name: string;
+  size: number;
+  content: string;
+};
+
+type VaultAnswer = {
+  vaultTitle: string;
+  priceNear: string;
+  insight: string;
+  attestationToken: string;
+};
+
+const INITIAL_VAULTS: MarketplaceVault[] = [
   {
-    title: "Hardware-Enclave Attestation",
-    detail: "AMD SEV-SNP Verified · simulated in this MVP",
+    id: "q3-financial-market-demand",
+    title: "Q3 Financial & Market Demand",
+    description: "Audited revenue, retention, and demand signals from a private SaaS operator.",
+    category: "Finance",
+    seller: "northstar.near",
+    priceNear: "0.1",
+    rows: 18420,
+    updated: "2h ago",
+    dataset: `Q3 Financial & Market Demand
+Total revenue: $4.2M, up 34% year over year.
+Net revenue retention: 118% across enterprise accounts.
+TEE query volume: 1.42M queries processed in Q3.
+Active vault monetizers: 850 enterprise accounts.
+Projected 2026 revenue: $22.6M at the current growth rate.
+Top demand signal: confidential analytics for regulated financial datasets.
+Gross margin: 81% after inference and settlement costs.
+Churn: 2.1% monthly, concentrated in self-serve accounts.
+Largest risk: inference cost volatility during peak demand.`,
   },
   {
-    title: "Semantic Similarity & Rate-Limit Audit",
-    detail: "Query pattern and repetition checks",
+    id: "medical-research-cohort-2026",
+    title: "Medical Research Cohort 2026",
+    description: "De-identified cohort outcomes and biomarker signals from a 2026 multi-site study.",
+    category: "Health",
+    seller: "cohortlab.near",
+    priceNear: "0.15",
+    rows: 12480,
+    updated: "5h ago",
+    dataset: `Medical Research Cohort 2026
+De-identified participants: 12,480 across 14 sites.
+Primary endpoint: 23% reduction in biomarker variance.
+Adverse event rate: 1.8%, with no severe events reported.
+Median follow-up: 18 months.
+Strongest cohort signal: responders show elevated IL-6 at baseline.
+Data retention: all records remain inside the enclave.
+Largest risk: missing longitudinal samples for 6% of participants.
+Projected enrollment for 2027: 18,000 participants.`,
   },
   {
-    title: "Differential Privacy Noise Filter",
-    detail: "ε = 0.5 · simulated parameter, not formal differential privacy",
+    id: "solidity-security-audit-report",
+    title: "Solidity Security Audit Report",
+    description: "Findings, coverage, and risk posture for a production DeFi protocol audit.",
+    category: "Security",
+    seller: "auditdao.near",
+    priceNear: "0.08",
+    rows: 342,
+    updated: "1d ago",
+    dataset: `Solidity Security Audit Report
+Contracts reviewed: 9 core contracts and 3 upgradeable proxies.
+Critical findings: 0 open, 2 resolved.
+High findings: 1 open, 5 resolved.
+Reentrancy: guarded with checks-effects-interactions and a mutex.
+Access control: 2 admin roles, both behind a 48-hour timelock.
+Oracle risk: single-source price feed flagged for hardening.
+Test coverage: 94% branch coverage across critical paths.
+Largest risk: privileged upgrade path requires operational discipline.`,
   },
   {
-    title: "NEAR Escrow Payout Execution",
-    detail: "Mock NEAR Intents settlement",
+    id: "defi-liquidity-insights",
+    title: "DeFi Liquidity Insights",
+    description: "Live-style liquidity, volume, and yield signals across six managed pools.",
+    category: "DeFi",
+    seller: "liquidity.near",
+    priceNear: "0.12",
+    rows: 9640,
+    updated: "3h ago",
+    dataset: `DeFi Liquidity Insights
+Total value locked: $186M across 6 pools.
+Stablecoin pool depth: $74M with 0.04% median slippage on $1M swaps.
+30-day volume: $1.9B, up 41% month over month.
+Liquidity utilization: 68% average across active pools.
+Top yield opportunity: ETH/USDC pool at 9.2% APY.
+Impermanent loss: 1.4% average for the past 30 days.
+Largest risk: concentrated LP ownership in the newest pool.
+Projected TVL for Q1 2027: $240M at current inflow.`,
   },
 ];
 
-function calculateEntropyScore(value: string) {
-  if (!value) return 0;
-  const frequencies = new Map<string, number>();
-  for (const character of value.toLowerCase()) {
-    frequencies.set(character, (frequencies.get(character) ?? 0) + 1);
-  }
+const QUERY_SUGGESTIONS = [
+  "Summarize the headline metrics",
+  "What are the biggest risks?",
+  "Show the strongest growth signal",
+];
 
-  const entropy = Array.from(frequencies.values()).reduce((score, count) => {
-    const probability = count / value.length;
-    return score - probability * Math.log2(probability);
-  }, 0);
+const STOP_WORDS = new Set([
+  "about", "above", "after", "again", "against", "also", "among", "and", "are", "because",
+  "been", "before", "being", "between", "both", "but", "can", "could", "data", "dataset",
+  "did", "does", "doing", "each", "for", "from", "give", "had", "has", "have", "here",
+  "how", "into", "its", "just", "main", "more", "most", "not", "now", "off", "once",
+  "only", "other", "our", "out", "over", "please", "query", "same", "she", "should",
+  "show", "some", "such", "tell", "than", "that", "the", "their", "them", "then",
+  "there", "these", "they", "this", "those", "through", "under", "until", "very",
+  "vault", "was", "were", "what", "when", "where", "which", "while", "who", "why",
+  "will", "with", "would", "you", "your",
+]);
 
-  return Math.min(100, Math.round((entropy / Math.log2(36)) * 100));
+const numberFormatter = new Intl.NumberFormat("en-US");
+
+function formatNumber(value: number) {
+  return numberFormatter.format(value);
 }
 
-function wait(milliseconds: number) {
-  return new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
+function formatBytes(bytes: number) {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export default function QueryVault({
-  fileCount,
-  queryReady,
-  isPreparingDataset,
-  buyerBalance,
-  isDepositing,
-  acceptedBid,
-  providerAddress,
-  insight,
-  antiProbingCheck,
-  attestationToken,
-  isOfflineDemoAnswer,
-  transactionHash,
-  runCount,
-  onProviderAddressChange,
-  onDeposit,
-  onLoadSampleDataset,
-  onRunQuery,
-}: QueryVaultProps) {
+function fileExtension(name: string) {
+  return name.split(".").pop()?.slice(0, 4).toUpperCase() ?? "FILE";
+}
+
+function normalizePrice(raw: string) {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return "0.1";
+  return String(Number(parsed.toFixed(4)));
+}
+
+function createAttestationToken() {
+  const bytes = new Uint8Array(8);
+  window.crypto.getRandomValues(bytes);
+  return `mock_tee_${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function estimateRows(dataset: string) {
+  const records = dataset.split("\n").filter((line) => line.trim().length > 0).length;
+  return Math.max(1, Math.round(records * 1.4));
+}
+
+function buildVaultInsight(vault: MarketplaceVault, query: string) {
+  const terms = Array.from(new Set(
+    query.toLowerCase().match(/[a-z0-9]{3,}/g)?.filter((term) => !STOP_WORDS.has(term)) ?? [],
+  ));
+  const lines = vault.dataset
+    .split("\n")
+    .map((line) => line.replace(/^[-*•]\s*/, "").trim())
+    .filter((line) => line.length > 2);
+
+  const ranked = lines
+    .map((line) => {
+      const lower = line.toLowerCase();
+      const score = terms.reduce((total, term) => total + (lower.includes(term) ? 1 : 0), 0);
+      return { line, score };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 3)
+    .map((entry) => entry.line);
+
+  const numericFallback = lines.filter((line) => /\d/.test(line)).slice(0, 3);
+  const evidence = ranked.length ? ranked : numericFallback.length ? numericFallback : lines.slice(0, 3);
+  const bullets = evidence.map((line) => `- ${line}`).join("\n");
+
+  return [
+    `Simulated TEE analysis for "${vault.title}"`,
+    `Question: "${query}"`,
+    "",
+    bullets,
+    "",
+    `This answer was assembled in your browser from the vault's published sample of ${formatNumber(vault.rows)} rows. No network request or real hardware attestation was performed.`,
+  ].join("\n");
+}
+
+export default function QueryVault({ providerAddress, onProviderAddressChange }: QueryVaultProps) {
+  const [activeTab, setActiveTab] = useState<ViewTab>("marketplace");
+  const [vaults, setVaults] = useState<MarketplaceVault[]>(INITIAL_VAULTS);
+  const [selectedVaultId, setSelectedVaultId] = useState<string>(INITIAL_VAULTS[0].id);
   const [query, setQuery] = useState("");
   const [isExecuting, setIsExecuting] = useState(false);
-  const [activeStep, setActiveStep] = useState(-1);
-  const [queriesUsed, setQueriesUsed] = useState(0);
-  const remainingQueries = Math.max(0, 5 - queriesUsed);
+  const [answer, setAnswer] = useState<VaultAnswer | null>(null);
+  const [marketplaceNotice, setMarketplaceNotice] = useState("");
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  const [draftFiles, setDraftFiles] = useState<DraftFile[]>([]);
+  const [draftTitle, setDraftTitle] = useState("");
+  const [draftDescription, setDraftDescription] = useState("");
+  const [draftPrice, setDraftPrice] = useState("0.1");
+  const [isDragging, setIsDragging] = useState(false);
+  const [draftNotice, setDraftNotice] = useState("");
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const timeoutRef = useRef<number | null>(null);
+  const runIdRef = useRef(0);
+
+  useEffect(() => () => {
+    if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
+  }, []);
+
+  const selectedVault = vaults.find((vault) => vault.id === selectedVaultId) ?? vaults[0];
+  const parsedPrice = Number(draftPrice);
+  const canPublish = draftFiles.length > 0
+    && draftTitle.trim().length > 0
+    && Number.isFinite(parsedPrice)
+    && parsedPrice > 0;
+
+  function handleSelectVault(vaultId: string) {
+    if (vaultId === selectedVaultId) return;
+    if (timeoutRef.current !== null) {
+      window.clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    runIdRef.current += 1;
+    setSelectedVaultId(vaultId);
+    setQuery("");
+    setAnswer(null);
+    setIsExecuting(false);
+    setMarketplaceNotice("");
+  }
+
+  function handleRunQuery(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!query.trim() || !queryReady || isExecuting || remainingQueries === 0) return;
+    const submittedQuery = query.trim();
+    if (!submittedQuery || isExecuting) return;
 
-    setQueriesUsed((used) => used + 1);
+    const vault = selectedVault;
+    const runId = runIdRef.current + 1;
+    runIdRef.current = runId;
     setIsExecuting(true);
-    setActiveStep(0);
+    setAnswer(null);
+    setMarketplaceNotice("");
 
-    let requestFinished = false;
-    const request = onRunQuery(query.trim()).then((success) => {
-      requestFinished = true;
-      return success;
-    });
+    if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
+    timeoutRef.current = window.setTimeout(() => {
+      if (runId !== runIdRef.current) return;
+      setAnswer({
+        vaultTitle: vault.title,
+        priceNear: vault.priceNear,
+        insight: buildVaultInsight(vault, submittedQuery),
+        attestationToken: createAttestationToken(),
+      });
+      setIsExecuting(false);
+      timeoutRef.current = null;
+    }, 480);
+  }
 
-    try {
-      for (let step = 0; step < PIPELINE_STEPS.length; step += 1) {
-        setActiveStep(step);
-        await wait(650);
-        if (requestFinished) break;
+  async function addDraftFiles(selectedFiles: FileList | File[]) {
+    const accepted: DraftFile[] = [];
+    const rejected: string[] = [];
+
+    for (const file of Array.from(selectedFiles)) {
+      const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+      if (!["pdf", "csv", "txt"].includes(extension)) {
+        rejected.push(file.name);
+        continue;
       }
 
-      const succeeded = await request;
-      setActiveStep(succeeded ? PIPELINE_STEPS.length : -1);
-    } finally {
-      setIsExecuting(false);
+      let content = "";
+      if (extension === "pdf") {
+        content = `PDF document "${file.name}" (${formatBytes(file.size)}). Local text extraction is simulated in this demo.`;
+      } else {
+        try {
+          content = await file.text();
+        } catch {
+          content = "";
+        }
+        if (!content.trim()) {
+          content = `Document "${file.name}" (${formatBytes(file.size)}).`;
+        }
+      }
+
+      accepted.push({
+        id: window.crypto.randomUUID(),
+        name: file.name,
+        size: file.size,
+        content,
+      });
+    }
+
+    if (accepted.length) {
+      setDraftFiles((current) => [...current, ...accepted]);
+      setDraftNotice(`${accepted.length} file${accepted.length === 1 ? "" : "s"} ready to publish.`);
+    } else {
+      setDraftNotice("");
+    }
+
+    if (rejected.length) {
+      setDraftNotice(`Skipped ${rejected.join(", ")}. Only .pdf, .csv, and .txt files are supported.`);
     }
   }
 
-  const entropyScore = calculateEntropyScore(query);
-  const pipelineComplete = !isOfflineDemoAnswer && Boolean(insight) && antiProbingCheck === "PASSED";
+  function handleDraftFileChange(event: ChangeEvent<HTMLInputElement>) {
+    if (event.target.files) void addDraftFiles(event.target.files);
+    event.target.value = "";
+  }
+
+  function handleDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setIsDragging(false);
+    if (event.dataTransfer.files.length) void addDraftFiles(event.dataTransfer.files);
+  }
+
+  function removeDraftFile(fileId: string) {
+    setDraftFiles((current) => current.filter((file) => file.id !== fileId));
+  }
+
+  function handlePublish(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canPublish) return;
+
+    if (timeoutRef.current !== null) {
+      window.clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    runIdRef.current += 1;
+
+    const title = draftTitle.trim();
+    const dataset = draftFiles.map((file) => `### ${file.name}\n${file.content}`).join("\n\n");
+    const newVault: MarketplaceVault = {
+      id: window.crypto.randomUUID(),
+      title,
+      description: draftDescription.trim() || "Published from the Monetize Vault tab.",
+      category: "Custom",
+      seller: providerAddress.trim() || "you.near",
+      priceNear: normalizePrice(draftPrice),
+      rows: estimateRows(dataset),
+      updated: "just now",
+      dataset,
+    };
+
+    setVaults((current) => [newVault, ...current]);
+    setSelectedVaultId(newVault.id);
+    setQuery("");
+    setAnswer(null);
+    setIsExecuting(false);
+    setActiveTab("marketplace");
+    setMarketplaceNotice(`"${title}" is live in the local TEE marketplace.`);
+    setDraftFiles([]);
+    setDraftTitle("");
+    setDraftDescription("");
+    setDraftPrice("0.1");
+    setDraftNotice("");
+  }
 
   return (
-    <section className="flex min-w-0 flex-col border border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl transition-colors hover:border-emerald-500/40">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-emerald-500/20 px-5 py-4">
+    <section className="flex min-w-0 flex-col overflow-hidden border border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl transition-colors hover:border-emerald-500/40">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-emerald-500/20 px-4 py-4 sm:px-5">
         <div className="flex items-center gap-3">
           <span className="size-2 rotate-45 border border-[#34D399]" />
-          <h2 className="text-[14px] font-medium">Ask your data</h2>
+          <div>
+            <h2 className="text-[14px] font-medium text-[#F0FDF4]">Query Vault</h2>
+            <p className="mt-0.5 text-[10px] text-[#7D9187]">Private datasets, attested answers</p>
+          </div>
         </div>
         <span className="flex items-center gap-2 text-[10px] text-[#A7B9B0]">
           <span className="size-1.5 rounded-full bg-[#34D399]" />
-          Query preview
+          TEE marketplace · demo
         </span>
       </div>
 
-      <div className="flex flex-1 flex-col gap-4 p-4 sm:p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3 border border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl px-4 py-3">
-          <div>
-            <div className="text-[11px] text-[#A7B9B0]">Demo query balance</div>
-            <div className="mt-1 font-mono text-[16px] font-semibold text-[#F0FDF4]">{buyerBalance} <span className="text-[12px] font-normal text-[#A7B9B0]">USDC</span></div>
-          </div>
+      <div className="border-b border-emerald-500/20 px-4 py-3 sm:px-5">
+        <div
+          role="tablist"
+          aria-label="Vault views"
+          className="flex w-full gap-1 border border-emerald-500/20 bg-[#0B0F17]/60 p-1 sm:w-fit"
+        >
           <button
+            id="marketplace-tab"
             type="button"
-            onClick={onDeposit}
-            disabled={isDepositing || buyerBalance >= 50}
-            className="flex h-9 items-center justify-center gap-2 border border-emerald-500/30 bg-emerald-950/40 px-3 text-[11px] text-emerald-400 transition hover:border-emerald-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+            role="tab"
+            aria-selected={activeTab === "marketplace"}
+            aria-controls="marketplace-panel"
+            onClick={() => setActiveTab("marketplace")}
+            className={`flex-1 px-3 py-2 text-[11px] font-medium transition sm:flex-none ${
+              activeTab === "marketplace"
+                ? "bg-emerald-500 text-slate-950 shadow-lg shadow-emerald-500/20"
+                : "text-[#A7B9B0] hover:bg-emerald-950/40 hover:text-[#F0FDF4]"
+            }`}
           >
-            {isDepositing ? "Funding agent..." : buyerBalance >= 50 ? "Agent funded" : "Deposit 50 USDC to Agent"}
-          </button>
-        </div>
-
-        <div className="flex flex-wrap items-center justify-between gap-3 border-l-2 border-[#10B981]/70 bg-emerald-950/40 px-4 py-3">
-          <div>
-            <div className="text-[12px] font-medium text-[#F0FDF4]">Try a sample dataset</div>
-            <p className="mt-1 text-[11px] leading-5 text-[#A7B9B0]">
-              Explore the query flow with sample Q3 financials.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onLoadSampleDataset}
-            disabled={isPreparingDataset || isExecuting}
-            className="shrink-0 bg-emerald-500 px-3 py-2 text-[11px] font-semibold text-slate-950 shadow-lg shadow-emerald-500/20 transition-all hover:bg-emerald-400 disabled:cursor-wait disabled:opacity-55"
-          >
-            {isPreparingDataset ? "Loading sample..." : "Load Sample Dataset"}
-          </button>
-        </div>
-
-        <div className="border border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl p-4 sm:p-5">
-          <div className="mb-3 flex items-center justify-between">
-            <label htmlFor="research-query" className="text-[12px] font-medium text-[#E2F8EC]">
-              Ask the private dataset
-            </label>
-            <span className="text-[10px] text-[#7D9187]">Up to 500 characters</span>
-          </div>
-          <form onSubmit={(event) => void handleSubmit(event)}>
-            <div className="border border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl transition-colors focus-within:border-[#10B981]/70">
-              <div className="flex items-start gap-3 px-4 pt-4">
-                <span className="mt-0.5 text-[14px] text-[#34D399]" aria-hidden="true">“</span>
-                <textarea
-                  id="research-query"
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  rows={3}
-                  maxLength={500}
-                  placeholder="What is the projected revenue for 2026?"
-                  className="min-h-[92px] flex-1 resize-y bg-transparent text-[14px] leading-6 text-[#F0FDF4] outline-none placeholder:text-[#7D9187]"
-                />
-              </div>
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-emerald-500/20 px-4 py-3">
-                <span className="text-[10px] text-[#A7B9B0]">
-                  {query.length} / 500 <span className="mx-2 text-[#047857]">·</span> {fileCount ? `${fileCount} file${fileCount === 1 ? "" : "s"} attached` : "No files attached"}
-                </span>
-                <button
-                  type="submit"
-                  disabled={!query.trim() || !queryReady || isExecuting || remainingQueries === 0}
-                  className="flex h-10 items-center gap-3 bg-emerald-500 px-4 text-[11px] font-semibold text-slate-950 shadow-lg shadow-emerald-500/20 transition-all hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {isExecuting ? "Processing in enclave..." : remainingQueries === 0 ? "Query limit reached" : "Run Confidential Query"}
-                  <span aria-hidden="true">{isExecuting ? "···" : "→"}</span>
-                </button>
-              </div>
-            </div>
-          </form>
-
-          <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_130px]">
-            <label className="min-w-0">
-              <span className="mb-2 block text-[11px] text-[#A7B9B0]">Provider destination</span>
-              <input
-                value={providerAddress}
-                onChange={(event) => onProviderAddressChange(event.target.value)}
-                maxLength={128}
-                placeholder="provider.near"
-                className="h-10 w-full border border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl px-3 text-[12px] text-[#E2F8EC] outline-none transition placeholder:text-[#7D9187] focus:border-[#10B981]/60"
-              />
-            </label>
-            <label>
-              <span className="mb-2 block text-[11px] text-[#A7B9B0]">Accepted bid · USDC</span>
-              <input
-                value={acceptedBid ?? ""}
-                readOnly
-                placeholder="Accept agent bid"
-                className="h-10 w-full border border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl px-3 text-[12px] text-[#E2F8EC] outline-none placeholder:text-[#7D9187]"
-              />
-            </label>
-          </div>
-        </div>
-
-        <div className="border border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl p-4 sm:p-5">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-[12px] font-medium text-[#E2F8EC]">What happens to a query</h3>
-            <span className="text-[10px] text-[#A7B9B0]">
-              Simulated workflow
-            </span>
-          </div>
-          <ol className="grid gap-0 sm:grid-cols-2">
-            {PIPELINE_STEPS.map((step, index) => {
-              const isActive = isExecuting && activeStep === index;
-              const isComplete = pipelineComplete
-                ? true
-                : isExecuting
-                  ? activeStep > index
-                  : !isOfflineDemoAnswer && activeStep === PIPELINE_STEPS.length;
-
-              return (
-                <li
-                  key={step.title}
-                  className={`flex items-start gap-3 border-b border-emerald-500/20 px-3 py-3 transition-colors duration-300 sm:even:border-l ${
-                    isActive || isComplete
-                      ? "bg-[#10B981]/[0.035]"
-                      : "bg-transparent"
-                  }`}
-                >
-                  <span className={`grid size-6 shrink-0 place-items-center border font-mono text-[10px] ${
-                    isActive || isComplete
-                      ? "border-[#34D399] text-[#10B981]"
-                      : "border-emerald-500/20 text-[#7D9187]"
-                  }`}>
-                    {isComplete ? "✓" : String(index + 1).padStart(2, "0")}
-                  </span>
-                  <span className="min-w-0">
-                    <span className="block text-[12px] font-medium text-[#E2F8EC]">
-                      {isOfflineDemoAnswer ? "Not run in offline demo" : step.title}
-                    </span>
-                    <span className="mt-1 block text-[10px] leading-4 text-[#A7B9B0]">
-                      {isOfflineDemoAnswer ? "No server attestation or query checks were performed." : step.detail}
-                    </span>
-                  </span>
-                  {isActive && <span className="ml-auto mt-1 size-2 shrink-0 animate-pulse rounded-full bg-emerald-500" />}
-                </li>
-              );
-            })}
-          </ol>
-          <p className="mt-3 text-[10px] leading-4 text-[#7D9187]">
-            No hardware proof or NEAR funds are used in this prototype.
-          </p>
-        </div>
-
-        <div className="overflow-hidden border border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-emerald-500/20 px-4 py-3">
-            <div>
-              <div className="text-[13px] font-medium text-[#F0FDF4]">Answer</div>
-              <div className="mt-1 text-[10px] text-[#A7B9B0]">
-                Query {runCount ? `#${runCount}` : "not run"} · {
-                  isOfflineDemoAnswer
-                    ? "local fallback · not attested"
-                    : attestationToken
-                      ? "demo token received"
-                      : "waiting for a question"
-                }
-              </div>
-            </div>
-            <span className={`border px-2 py-1 text-[10px] ${
-              isOfflineDemoAnswer
-                ? "border-amber-500/30 text-amber-300"
-                : "border-emerald-500/20 text-[#D1FAE5]"
+            Marketplace
+            <span className={`ml-2 text-[9px] uppercase tracking-[0.12em] ${
+              activeTab === "marketplace" ? "text-slate-800" : "text-[#7D9187]"
             }`}>
-              {isOfflineDemoAnswer
-                ? "Demo only · not attested"
-                : insight && antiProbingCheck === "PASSED"
-                  ? "Result ready"
-                  : isExecuting
-                    ? "Executing"
-                    : "Answer preview"}
+              Buyer
             </span>
-          </div>
-          <div aria-live="polite" className="min-h-24 px-4 py-5 text-[14px] leading-7 text-[#E2F8EC]">
-            {isExecuting
-              ? "Running query checks and preparing a confidential result..."
-              : insight || "Load a dataset and ask a question to see a confidential insight."}
-          </div>
-          {isOfflineDemoAnswer && (
-            <div className="border-t border-amber-500/20 bg-amber-950/20 px-4 py-3 text-[11px] leading-5 text-amber-200" role="status">
-              This is a local placeholder, not a dataset analysis or attested answer. No server checks or settlement were performed.
+          </button>
+          <button
+            id="monetize-tab"
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "monetize"}
+            aria-controls="monetize-panel"
+            onClick={() => setActiveTab("monetize")}
+            className={`flex-1 px-3 py-2 text-[11px] font-medium transition sm:flex-none ${
+              activeTab === "monetize"
+                ? "bg-emerald-500 text-slate-950 shadow-lg shadow-emerald-500/20"
+                : "text-[#A7B9B0] hover:bg-emerald-950/40 hover:text-[#F0FDF4]"
+            }`}
+          >
+            Monetize Vault
+            <span className={`ml-2 text-[9px] uppercase tracking-[0.12em] ${
+              activeTab === "monetize" ? "text-slate-800" : "text-[#7D9187]"
+            }`}>
+              Seller
+            </span>
+          </button>
+        </div>
+      </div>
+
+      <div className="flex-1 p-4 sm:p-5">
+        {activeTab === "marketplace" ? (
+          <div
+            role="tabpanel"
+            id="marketplace-panel"
+            aria-labelledby="marketplace-tab"
+            className="space-y-4"
+          >
+            {marketplaceNotice && (
+              <div role="status" className="border border-emerald-500/20 bg-emerald-950/40 px-3 py-2 text-[11px] text-[#D1FAE5]">
+                {marketplaceNotice}
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <h3 className="text-[12px] font-medium text-[#E2F8EC]">Active TEE vaults</h3>
+                <p className="mt-1 text-[11px] leading-5 text-[#A7B9B0]">
+                  Select a vault to query it instantly. No file upload required.
+                </p>
+              </div>
+              <span className="border border-emerald-500/20 bg-emerald-950/30 px-2 py-1 text-[10px] text-[#34D399]">
+                {vaults.length} vaults online
+              </span>
             </div>
-          )}
-          {insight && antiProbingCheck === "PASSED" && (
-            <div className="border-t border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl p-4">
-              <div className="mb-3 flex items-center gap-2 text-[11px] font-medium text-[#10B981]">
-                <span aria-hidden="true">⌑</span>
-                Anti-probing checks passed
-              </div>
-              <div className="grid gap-3 text-[10px] sm:grid-cols-3">
-                <div className="border border-emerald-500/20 px-3 py-2">
-                  <span className="block text-[#A7B9B0]">Query entropy estimate</span>
-                  <span className="mt-1 block font-mono text-[#F0FDF4]">{entropyScore} / 100</span>
-                </div>
-                <div className="border border-emerald-500/20 px-3 py-2">
-                  <span className="block text-[#A7B9B0]">Estimated queries left</span>
-                  <span className="mt-1 block font-mono text-[#F0FDF4]">{remainingQueries} / 5</span>
-                </div>
-                <div className="border border-emerald-500/20 px-3 py-2">
-                  <span className="block text-[#A7B9B0]">Noise parameter</span>
-                  <span className="mt-1 block font-mono text-[#F0FDF4]">ε = 0.5 · demo only</span>
-                </div>
-              </div>
-              <p className="mt-3 text-[10px] leading-4 text-[#A7B9B0]">
-                Entropy and remaining-query values are UI estimates; server-side anti-probing checks remain authoritative.
-                The demo noise parameter is not a formal differential-privacy guarantee.
-              </p>
-              {transactionHash && (
-                <div className="mt-3 border-t border-emerald-500/20 pt-3">
-                  <span className="block text-[10px] text-[#A7B9B0]">
-                    Simulated NEAR transaction · no funds moved
-                  </span>
-                  <a
-                    href={`https://testnet.nearblocks.io/txns/${encodeURIComponent(transactionHash)}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="mt-1 block break-all font-mono text-[11px] leading-5 text-[#10B981] underline decoration-[#34D399]/50 underline-offset-2 hover:text-[#F0FDF4]"
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              {vaults.map((vault) => {
+                const isSelected = vault.id === selectedVault.id;
+                return (
+                  <button
+                    key={vault.id}
+                    type="button"
+                    onClick={() => handleSelectVault(vault.id)}
+                    aria-pressed={isSelected}
+                    className={`group relative flex h-full flex-col border p-4 text-left transition ${
+                      isSelected
+                        ? "border-[#10B981]/70 bg-emerald-950/50 shadow-[0_0_0_1px_rgba(16,185,129,0.25)]"
+                        : "border-emerald-500/20 bg-[#0B0F17]/60 hover:border-emerald-500/40 hover:bg-emerald-950/30"
+                    }`}
                   >
-                    {transactionHash}
-                  </a>
+                    <span className="flex items-start justify-between gap-3">
+                      <span className="border border-emerald-500/20 bg-[#0B0F17]/60 px-2 py-1 text-[9px] uppercase tracking-[0.14em] text-[#34D399]">
+                        {vault.category}
+                      </span>
+                      {isSelected ? (
+                        <span className="flex items-center gap-1.5 text-[9px] uppercase tracking-[0.12em] text-[#34D399]">
+                          <span className="size-1.5 rounded-full bg-[#34D399]" />
+                          Selected
+                        </span>
+                      ) : (
+                        <span className="text-[12px] text-[#7D9187] transition group-hover:text-[#34D399]" aria-hidden="true">
+                          →
+                        </span>
+                      )}
+                    </span>
+
+                    <span className="mt-3 block text-[13px] font-medium text-[#F0FDF4]">
+                      {vault.title}
+                    </span>
+                    <span className="mt-2 line-clamp-2 block text-[11px] leading-5 text-[#A7B9B0]">
+                      {vault.description}
+                    </span>
+
+                    <span className="mt-auto flex items-end justify-between gap-3 pt-4">
+                      <span>
+                        <span className="block text-[9px] uppercase tracking-[0.14em] text-[#7D9187]">Price</span>
+                        <span className="mt-1 block font-mono text-[13px] text-[#F0FDF4]">
+                          {vault.priceNear} <span className="text-[10px] font-normal text-[#A7B9B0]">NEAR</span>
+                        </span>
+                      </span>
+                      <span className="text-right text-[10px] text-[#7D9187]">
+                        <span className="block">{formatNumber(vault.rows)} rows</span>
+                        <span className="mt-0.5 block">{vault.updated}</span>
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="border border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-emerald-500/20 px-4 py-3">
+                <div className="min-w-0">
+                  <div className="text-[10px] text-[#A7B9B0]">Selected vault</div>
+                  <div className="mt-1 truncate text-[13px] font-medium text-[#F0FDF4]">{selectedVault.title}</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="border border-emerald-500/20 bg-[#0B0F17]/60 px-2 py-1 font-mono text-[10px] text-[#34D399]">
+                    {selectedVault.priceNear} NEAR / query
+                  </span>
+                  <span className="hidden border border-emerald-500/20 px-2 py-1 text-[9px] uppercase tracking-[0.14em] text-[#A7B9B0] sm:inline">
+                    No upload
+                  </span>
+                </div>
+              </div>
+
+              <form onSubmit={handleRunQuery} className="p-4">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <label htmlFor="vault-query" className="text-[11px] font-medium text-[#E2F8EC]">
+                    Ask the private dataset
+                  </label>
+                  <span className="text-[10px] text-[#7D9187]">{query.length} / 500</span>
+                </div>
+                <div className="border border-emerald-500/20 bg-[#0B0F17]/80 transition-colors focus-within:border-[#10B981]/70">
+                  <textarea
+                    id="vault-query"
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    rows={3}
+                    maxLength={500}
+                    placeholder="What is the projected revenue for 2026?"
+                    className="min-h-[88px] w-full resize-y bg-transparent px-3 pt-3 text-[13px] leading-6 text-[#F0FDF4] outline-none placeholder:text-[#7D9187]"
+                  />
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-t border-emerald-500/20 px-3 py-2.5">
+                    <span className="text-[10px] text-[#7D9187]">Simulated TEE execution · local demo</span>
+                    <button
+                      type="submit"
+                      disabled={!query.trim() || isExecuting}
+                      className="flex h-9 items-center gap-2 bg-emerald-500 px-3 text-[11px] font-semibold text-slate-950 shadow-lg shadow-emerald-500/20 transition-all hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {isExecuting ? "Processing..." : `Run query · ${selectedVault.priceNear} NEAR`}
+                      <span aria-hidden="true">{isExecuting ? "···" : "→"}</span>
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {QUERY_SUGGESTIONS.map((suggestion) => (
+                    <button
+                      key={suggestion}
+                      type="button"
+                      onClick={() => setQuery(suggestion)}
+                      className="border border-emerald-500/20 bg-[#0B0F17]/60 px-2.5 py-1.5 text-[10px] text-[#A7B9B0] transition hover:border-emerald-500/40 hover:text-[#F0FDF4]"
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
+                </div>
+              </form>
+
+              {isExecuting && (
+                <div role="status" className="border-t border-emerald-500/20 bg-emerald-950/20 px-4 py-4">
+                  <div className="flex items-center gap-3 text-[12px] text-[#34D399]">
+                    <span className="size-2 animate-pulse rounded-full bg-emerald-500" />
+                    Routing the query through the simulated TEE enclave...
+                  </div>
+                  <div className="mt-3 h-1 w-full overflow-hidden bg-emerald-500/10">
+                    <div className="h-full w-1/2 animate-pulse bg-emerald-500/60" />
+                  </div>
+                </div>
+              )}
+
+              {!isExecuting && answer && (
+                <div aria-live="polite" className="border-t border-emerald-500/20 px-4 py-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-[11px] font-medium text-[#34D399]">
+                      <span aria-hidden="true">⌑</span>
+                      Simulated TEE response
+                    </div>
+                    <span className="border border-emerald-500/20 px-2 py-1 text-[9px] uppercase tracking-[0.14em] text-[#D1FAE5]">
+                      Simulated attestation
+                    </span>
+                  </div>
+                  <div className="mt-1 text-[10px] text-[#7D9187]">
+                    {answer.vaultTitle} · {answer.priceNear} NEAR per query
+                  </div>
+                  <p className="mt-3 whitespace-pre-line break-words text-[12px] leading-6 text-[#E2F8EC]">
+                    {answer.insight}
+                  </p>
+                  <div className="mt-4 grid gap-2 text-[10px] sm:grid-cols-3">
+                    <div className="border border-emerald-500/20 bg-[#0B0F17]/60 px-3 py-2">
+                      <span className="block text-[#A7B9B0]">Attestation token</span>
+                      <code className="mt-1 block break-all font-mono text-[10px] text-[#34D399]">
+                        {answer.attestationToken}
+                      </code>
+                    </div>
+                    <div className="border border-emerald-500/20 bg-[#0B0F17]/60 px-3 py-2">
+                      <span className="block text-[#A7B9B0]">Anti-probing</span>
+                      <span className="mt-1 block font-mono text-[#F0FDF4]">PASSED</span>
+                    </div>
+                    <div className="border border-emerald-500/20 bg-[#0B0F17]/60 px-3 py-2">
+                      <span className="block text-[#A7B9B0]">Query price</span>
+                      <span className="mt-1 block font-mono text-[#F0FDF4]">{answer.priceNear} NEAR · simulated</span>
+                    </div>
+                  </div>
+                  <p className="mt-3 text-[10px] leading-4 text-[#7D9187]">
+                    Local demo only. No network call, settlement, or real hardware attestation occurred.
+                  </p>
+                </div>
+              )}
+
+              {!isExecuting && !answer && (
+                <div className="border-t border-emerald-500/20 px-4 py-4 text-[11px] leading-5 text-[#7D9187]">
+                  Answers appear here after a query. Each run is simulated locally against the selected vault sample.
                 </div>
               )}
             </div>
-          )}
-        </div>
+          </div>
+        ) : (
+          <div
+            role="tabpanel"
+            id="monetize-panel"
+            aria-labelledby="monetize-tab"
+            className="space-y-4"
+          >
+            <div>
+              <h3 className="text-[12px] font-medium text-[#E2F8EC]">Monetize a vault</h3>
+              <p className="mt-1 text-[11px] leading-5 text-[#A7B9B0]">
+                Package a dataset, set a NEAR price, and publish it to the marketplace. Files never leave this browser.
+              </p>
+            </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-[#7D9187]">
-          <span>{queryReady ? "Dataset ready for a question" : "Add a dataset and authorize a query to continue"}</span>
-          <span>Simulation · no hardware attestation</span>
-        </div>
+            {draftNotice && (
+              <div role="status" className="border border-emerald-500/20 bg-emerald-950/40 px-3 py-2 text-[11px] text-[#D1FAE5]">
+                {draftNotice}
+              </div>
+            )}
+
+            <form onSubmit={handlePublish} className="space-y-4">
+              <div>
+                <span className="mb-2 block text-[11px] text-[#A7B9B0]">Dataset files</span>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  accept=".pdf,.csv,.txt"
+                  className="sr-only"
+                  onChange={handleDraftFileChange}
+                  aria-label="Select a PDF, CSV, or text dataset"
+                />
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => fileInputRef.current?.click()}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      fileInputRef.current?.click();
+                    }
+                  }}
+                  onDragEnter={(event) => { event.preventDefault(); setIsDragging(true); }}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDragLeave={(event) => {
+                    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsDragging(false);
+                  }}
+                  onDrop={handleDrop}
+                  className={`group flex min-h-[150px] cursor-pointer flex-col items-center justify-center border border-dashed px-4 text-center transition-colors ${
+                    isDragging
+                      ? "border-[#10B981] bg-[#10B981]/[0.06]"
+                      : "border-emerald-500/25 bg-[#0B0F17]/60 hover:border-[#34D399] hover:bg-emerald-950/30"
+                  }`}
+                >
+                  <span className="grid size-10 place-items-center border border-[#34D399]/45 bg-[#34D399]/[0.06] text-xl text-[#10B981] transition group-hover:border-[#10B981]/70">
+                    +
+                  </span>
+                  <span className="mt-3 text-[12px] font-medium text-[#F0FDF4]">Drop .pdf, .csv, or .txt files</span>
+                  <span className="mt-1 text-[11px] text-[#A7B9B0]">
+                    or <span className="text-[#34D399] underline underline-offset-2">browse your device</span>
+                  </span>
+                  <span className="mt-3 text-[10px] text-[#7D9187]">Parsed locally · no network request</span>
+                </div>
+              </div>
+
+              {draftFiles.length > 0 && (
+                <ul className="divide-y divide-white/[0.06] border-y border-white/[0.07]">
+                  {draftFiles.map((file) => (
+                    <li key={file.id} className="flex items-center justify-between gap-3 py-2.5">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <span className="grid size-8 shrink-0 place-items-center border border-emerald-500/20 text-[9px] text-[#34D399]">
+                          {fileExtension(file.name)}
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block truncate text-[11px] text-[#D1FAE5]">{file.name}</span>
+                          <span className="mt-0.5 block text-[10px] text-[#7D9187]">{formatBytes(file.size)} · ready</span>
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeDraftFile(file.id)}
+                        className="shrink-0 px-2 py-1 text-[10px] text-[#A7B9B0] hover:text-[#FCA5A5]"
+                        aria-label={`Remove ${file.name}`}
+                      >
+                        REMOVE
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_150px]">
+                <label className="min-w-0">
+                  <span className="mb-1.5 block text-[11px] text-[#A7B9B0]">Dataset title</span>
+                  <input
+                    value={draftTitle}
+                    onChange={(event) => setDraftTitle(event.target.value)}
+                    maxLength={80}
+                    placeholder="Q4 Revenue & Retention"
+                    className="h-10 w-full border border-emerald-500/20 bg-[#0B0F17]/80 px-3 text-[12px] text-[#E2F8EC] outline-none transition placeholder:text-[#7D9187] focus:border-[#10B981]/60"
+                  />
+                  <span className="mt-1 block text-[9px] text-[#7D9187]">{draftTitle.length} / 80</span>
+                </label>
+                <label>
+                  <span className="mb-1.5 block text-[11px] text-[#A7B9B0]">Price per query</span>
+                  <span className="relative block">
+                    <input
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      value={draftPrice}
+                      onChange={(event) => setDraftPrice(event.target.value)}
+                      className="h-10 w-full border border-emerald-500/20 bg-[#0B0F17]/80 px-3 pr-12 text-[12px] text-[#E2F8EC] outline-none transition placeholder:text-[#7D9187] focus:border-[#10B981]/60"
+                    />
+                    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-[#7D9187]">
+                      NEAR
+                    </span>
+                  </span>
+                </label>
+              </div>
+
+              <label className="block">
+                <span className="mb-1.5 block text-[11px] text-[#A7B9B0]">Description</span>
+                <textarea
+                  value={draftDescription}
+                  onChange={(event) => setDraftDescription(event.target.value)}
+                  rows={2}
+                  maxLength={220}
+                  placeholder="What can buyers learn from this vault?"
+                  className="w-full resize-y border border-emerald-500/20 bg-[#0B0F17]/80 px-3 py-2 text-[12px] leading-5 text-[#E2F8EC] outline-none transition placeholder:text-[#7D9187] focus:border-[#10B981]/60"
+                />
+              </label>
+
+              <label className="block">
+                <span className="mb-1.5 block text-[11px] text-[#A7B9B0]">Payout address</span>
+                <input
+                  value={providerAddress}
+                  onChange={(event) => onProviderAddressChange(event.target.value)}
+                  maxLength={128}
+                  placeholder="you.near"
+                  className="h-10 w-full border border-emerald-500/20 bg-[#0B0F17]/80 px-3 text-[12px] text-[#E2F8EC] outline-none transition placeholder:text-[#7D9187] focus:border-[#10B981]/60"
+                />
+              </label>
+
+              <button
+                type="submit"
+                disabled={!canPublish}
+                className="flex h-11 w-full items-center justify-center gap-2 bg-emerald-500 text-[12px] font-semibold text-slate-950 shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-[#047857] disabled:text-[#A7B9B0]"
+              >
+                Publish to TEE Marketplace
+                <span aria-hidden="true">→</span>
+              </button>
+              <p className="text-center text-[10px] leading-4 text-[#7D9187]">
+                Publishing is local to this demo. No data or funds leave the browser.
+              </p>
+            </form>
+          </div>
+        )}
       </div>
     </section>
   );

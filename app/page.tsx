@@ -844,7 +844,6 @@ BLINDSIGHT CONFIDENTIAL DATASET - FINANCIAL & MARKET DEMAND REPORT
           </section>
 
           <QueryVault
-            key={preparedDatasetId || "unprepared"}
             fileCount={files.length}
             queryReady={Boolean(preparedDatasetId && vaultQueued && acceptedBid && buyerBalance >= 10)}
             isPreparingDataset={isPreparingDataset}
