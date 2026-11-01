@@ -166,6 +166,47 @@ export function formatNearAmount(value: number): string {
   return `${roundNear(value).toFixed(2)} NEAR`;
 }
 
+export async function fetchNearRpcBalance(accountId: string): Promise<number | null> {
+  const normalizedAccountId = accountId.trim();
+  if (!normalizedAccountId) return null;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8_000);
+  try {
+    const response = await fetch("https://rpc.testnet.near.org", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: "dontcare",
+        method: "query",
+        params: {
+          request_type: "view_account",
+          finality: "final",
+          account_id: normalizedAccountId,
+        },
+      }),
+    });
+    if (!response.ok) return null;
+
+    const payload: unknown = await response.json();
+    if (typeof payload !== "object" || payload === null || !("result" in payload)) return null;
+    const result = payload.result;
+    if (typeof result !== "object" || result === null || !("amount" in result)) return null;
+
+    const amount = result.amount;
+    if (typeof amount !== "string" || !/^\d+$/.test(amount)) return null;
+
+    const balanceNear = Number((Number(amount) / 1e24).toFixed(2));
+    return Number.isFinite(balanceNear) ? balanceNear : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 function formatTransactionTimestamp(): string {
   return new Date().toLocaleTimeString();
 }

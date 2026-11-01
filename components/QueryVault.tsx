@@ -15,11 +15,14 @@ import {
   WALLET_DEPOSIT_EVENT,
   WALLET_SYNC_EVENT,
   WALLETS_DB_STORAGE_KEY,
+  ensureWalletLedger,
+  fetchNearRpcBalance,
   formatNearAmount,
   loadAccountsLedger,
   normalizeAccountAddress,
   roundNear,
   saveAccountsLedger,
+  saveWalletLedger,
   seedAccountEarnings,
   type AccountsLedger,
   type QuerySettlementResult,
@@ -266,6 +269,7 @@ export default function QueryVault({
   const observedAccountRef = useRef("");
   const observedBalanceRef = useRef<number | null>(null);
   const observedTransactionIdsRef = useRef(new Set<string>());
+  const activeAccountId = walletLedger?.accountId;
 
   const showNotification = useCallback((message: string) => {
     setNotification(message);
@@ -323,6 +327,66 @@ export default function QueryVault({
     }
     observedBalanceRef.current = walletLedger.balanceNear;
   }, [walletLedger]);
+
+  useEffect(() => {
+    if (!activeAccountId) return;
+
+    const accountId = activeAccountId;
+    let cancelled = false;
+    let polling = false;
+
+    const syncOnChainBalance = async () => {
+      if (polling) return;
+      polling = true;
+      try {
+        const rpcBalance = await fetchNearRpcBalance(accountId);
+        if (cancelled || rpcBalance === null) return;
+
+        const currentLedger = ensureWalletLedger(accountId);
+        const balanceDelta = roundNear(rpcBalance - currentLedger.balanceNear);
+        if (balanceDelta === 0) return;
+
+        const transaction: WalletTransaction | null = balanceDelta > 0
+          ? {
+              id: `tx-near-testnet-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+              type: "DEPOSIT_CREDIT",
+              amount: `+${balanceDelta.toFixed(2)} NEAR`,
+              description: `Received +${balanceDelta.toFixed(2)} NEAR from NEAR Testnet`,
+              status: "SUCCESS",
+              timestamp: new Date().toLocaleTimeString(),
+            }
+          : null;
+        const updatedLedger: WalletLedger = {
+          ...currentLedger,
+          balanceNear: rpcBalance,
+          transactions: transaction
+            ? [transaction, ...currentLedger.transactions]
+            : currentLedger.transactions,
+        };
+
+        saveWalletLedger(updatedLedger);
+        window.dispatchEvent(new CustomEvent(WALLET_SYNC_EVENT, {
+          detail: {
+            fromAddr: "NEAR Testnet",
+            toAddr: accountId,
+            amount: balanceDelta,
+            transactionId: transaction?.id,
+          },
+        }));
+      } finally {
+        polling = false;
+      }
+    };
+
+    void syncOnChainBalance();
+    const intervalId = window.setInterval(() => {
+      void syncOnChainBalance();
+    }, 10_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [activeAccountId]);
 
   useEffect(() => {
     const refreshAccounts = () => setAccountsLedger(loadAccountsLedger());
@@ -406,7 +470,11 @@ export default function QueryVault({
         : newCredit?.recipient ??
           newCredit?.description.match(/received from (.+)$/i)?.[1] ??
           "unknown sender";
-      showNotification(`Received +${receivedAmount.toFixed(2)} NEAR · Credited from ${sender}`);
+      showNotification(
+        sender === "NEAR Testnet"
+          ? `Received +${receivedAmount.toFixed(2)} NEAR from NEAR Testnet`
+          : `Received +${receivedAmount.toFixed(2)} NEAR · Credited from ${sender}`,
+      );
     };
 
     const handleDeposit = (event: Event) => {
