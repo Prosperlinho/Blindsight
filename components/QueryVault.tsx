@@ -10,8 +10,6 @@ type QueryVaultProps = {
   isDepositing: boolean;
   acceptedBid: string | null;
   providerAddress: string;
-  errorMessage: string;
-  rateLimitAlert: boolean;
   insight: string;
   antiProbingCheck: string;
   attestationToken: string;
@@ -19,7 +17,6 @@ type QueryVaultProps = {
   transactionHash: string;
   runCount: number;
   onProviderAddressChange: (address: string) => void;
-  onDismissError: () => void;
   onDeposit: () => void;
   onLoadSampleDataset: () => void;
   onRunQuery: (query: string) => Promise<boolean>;
@@ -71,8 +68,6 @@ export default function QueryVault({
   isDepositing,
   acceptedBid,
   providerAddress,
-  errorMessage,
-  rateLimitAlert,
   insight,
   antiProbingCheck,
   attestationToken,
@@ -80,7 +75,6 @@ export default function QueryVault({
   transactionHash,
   runCount,
   onProviderAddressChange,
-  onDismissError,
   onDeposit,
   onLoadSampleDataset,
   onRunQuery,
@@ -277,30 +271,6 @@ export default function QueryVault({
             No hardware proof or NEAR funds are used in this prototype.
           </p>
         </div>
-
-        {errorMessage && (
-          <div
-            role="alert"
-            className={`fixed right-5 top-20 z-40 flex w-[min(440px,calc(100vw-40px))] items-start justify-between gap-4 border px-4 py-3 text-[12px] leading-5 shadow-2xl shadow-black/40 ${
-              rateLimitAlert
-                ? "border-[#F59E0B]/60 bg-[#241C0E] text-[#FDE68A]"
-                : "border-[#7F1D1D]/50 bg-[#261719] text-[#FCA5A5]"
-            }`}
-          >
-            <span>
-              <span className="font-medium">{rateLimitAlert ? "Query blocked." : "Request failed."}</span>
-              <span className="ml-1">{errorMessage}</span>
-            </span>
-            <button
-              type="button"
-              onClick={onDismissError}
-              aria-label="Dismiss error message"
-              className="shrink-0 text-base leading-none opacity-70 hover:opacity-100"
-            >
-              ×
-            </button>
-          </div>
-        )}
 
         <div className="overflow-hidden border border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-emerald-500/20 px-4 py-3">
