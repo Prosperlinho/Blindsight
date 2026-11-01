@@ -10,26 +10,11 @@ import {
 } from "react";
 
 type QueryVaultProps = {
-  fileCount: number;
-  queryReady: boolean;
-  isPreparingDataset: boolean;
-  buyerBalance: number;
-  isDepositing: boolean;
-  acceptedBid: string | null;
   providerAddress: string;
-  insight: string;
-  antiProbingCheck: string;
-  attestationToken: string;
-  isOfflineDemoAnswer: boolean;
-  transactionHash: string;
-  runCount: number;
   onProviderAddressChange: (address: string) => void;
-  onDeposit: () => void;
-  onLoadSampleDataset: () => void;
-  onRunQuery: (query: string) => Promise<boolean>;
 };
 
-type ViewTab = "marketplace" | "monetize";
+type ViewTab = "explorer" | "publisher";
 
 type MarketplaceVault = {
   id: string;
@@ -222,13 +207,13 @@ function buildVaultInsight(vault: MarketplaceVault, query: string) {
 }
 
 export default function QueryVault({ providerAddress, onProviderAddressChange }: QueryVaultProps) {
-  const [activeTab, setActiveTab] = useState<ViewTab>("marketplace");
+  const [activeTab, setActiveTab] = useState<ViewTab>("explorer");
   const [vaults, setVaults] = useState<MarketplaceVault[]>(INITIAL_VAULTS);
   const [selectedVaultId, setSelectedVaultId] = useState<string>(INITIAL_VAULTS[0].id);
   const [query, setQuery] = useState("");
   const [isExecuting, setIsExecuting] = useState(false);
   const [answer, setAnswer] = useState<VaultAnswer | null>(null);
-  const [marketplaceNotice, setMarketplaceNotice] = useState("");
+  const [explorerNotice, setExplorerNotice] = useState("");
 
   const [draftFiles, setDraftFiles] = useState<DraftFile[]>([]);
   const [draftTitle, setDraftTitle] = useState("");
@@ -263,7 +248,7 @@ export default function QueryVault({ providerAddress, onProviderAddressChange }:
     setQuery("");
     setAnswer(null);
     setIsExecuting(false);
-    setMarketplaceNotice("");
+    setExplorerNotice("");
   }
 
   function handleRunQuery(event: FormEvent<HTMLFormElement>) {
@@ -276,7 +261,7 @@ export default function QueryVault({ providerAddress, onProviderAddressChange }:
     runIdRef.current = runId;
     setIsExecuting(true);
     setAnswer(null);
-    setMarketplaceNotice("");
+    setExplorerNotice("");
 
     if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
     timeoutRef.current = window.setTimeout(() => {
@@ -367,7 +352,7 @@ export default function QueryVault({ providerAddress, onProviderAddressChange }:
     const newVault: MarketplaceVault = {
       id: window.crypto.randomUUID(),
       title,
-      description: draftDescription.trim() || "Published from the Monetize Vault tab.",
+      description: draftDescription.trim() || "Published from the Vault Publisher tab.",
       category: "Custom",
       seller: providerAddress.trim() || "you.near",
       priceNear: normalizePrice(draftPrice),
@@ -381,8 +366,8 @@ export default function QueryVault({ providerAddress, onProviderAddressChange }:
     setQuery("");
     setAnswer(null);
     setIsExecuting(false);
-    setActiveTab("marketplace");
-    setMarketplaceNotice(`"${title}" is live in the local TEE marketplace.`);
+    setActiveTab("explorer");
+    setExplorerNotice(`"${title}" is live in the local TEE marketplace.`);
     setDraftFiles([]);
     setDraftTitle("");
     setDraftDescription("");
@@ -413,59 +398,49 @@ export default function QueryVault({ providerAddress, onProviderAddressChange }:
           className="flex w-full gap-1 border border-emerald-500/20 bg-[#0B0F17]/60 p-1 sm:w-fit"
         >
           <button
-            id="marketplace-tab"
+            id="explorer-tab"
             type="button"
             role="tab"
-            aria-selected={activeTab === "marketplace"}
-            aria-controls="marketplace-panel"
-            onClick={() => setActiveTab("marketplace")}
-            className={`flex-1 px-3 py-2 text-[11px] font-medium transition sm:flex-none ${
-              activeTab === "marketplace"
+            aria-selected={activeTab === "explorer"}
+            aria-controls="explorer-panel"
+            onClick={() => setActiveTab("explorer")}
+            className={`flex-1 px-4 py-2 text-[11px] font-medium transition sm:flex-none ${
+              activeTab === "explorer"
                 ? "bg-emerald-500 text-slate-950 shadow-lg shadow-emerald-500/20"
                 : "text-[#A7B9B0] hover:bg-emerald-950/40 hover:text-[#F0FDF4]"
             }`}
           >
-            Marketplace
-            <span className={`ml-2 text-[9px] uppercase tracking-[0.12em] ${
-              activeTab === "marketplace" ? "text-slate-800" : "text-[#7D9187]"
-            }`}>
-              Buyer
-            </span>
+            Data Explorer
           </button>
           <button
-            id="monetize-tab"
+            id="publisher-tab"
             type="button"
             role="tab"
-            aria-selected={activeTab === "monetize"}
-            aria-controls="monetize-panel"
-            onClick={() => setActiveTab("monetize")}
-            className={`flex-1 px-3 py-2 text-[11px] font-medium transition sm:flex-none ${
-              activeTab === "monetize"
+            aria-selected={activeTab === "publisher"}
+            aria-controls="publisher-panel"
+            onClick={() => setActiveTab("publisher")}
+            className={`flex-1 px-4 py-2 text-[11px] font-medium transition sm:flex-none ${
+              activeTab === "publisher"
                 ? "bg-emerald-500 text-slate-950 shadow-lg shadow-emerald-500/20"
                 : "text-[#A7B9B0] hover:bg-emerald-950/40 hover:text-[#F0FDF4]"
             }`}
           >
-            Monetize Vault
-            <span className={`ml-2 text-[9px] uppercase tracking-[0.12em] ${
-              activeTab === "monetize" ? "text-slate-800" : "text-[#7D9187]"
-            }`}>
-              Seller
-            </span>
+            Vault Publisher
           </button>
         </div>
       </div>
 
       <div className="flex-1 p-4 sm:p-5">
-        {activeTab === "marketplace" ? (
+        {activeTab === "explorer" ? (
           <div
             role="tabpanel"
-            id="marketplace-panel"
-            aria-labelledby="marketplace-tab"
+            id="explorer-panel"
+            aria-labelledby="explorer-tab"
             className="space-y-4"
           >
-            {marketplaceNotice && (
+            {explorerNotice && (
               <div role="status" className="border border-emerald-500/20 bg-emerald-950/40 px-3 py-2 text-[11px] text-[#D1FAE5]">
-                {marketplaceNotice}
+                {explorerNotice}
               </div>
             )}
 
@@ -656,12 +631,12 @@ export default function QueryVault({ providerAddress, onProviderAddressChange }:
         ) : (
           <div
             role="tabpanel"
-            id="monetize-panel"
-            aria-labelledby="monetize-tab"
+            id="publisher-panel"
+            aria-labelledby="publisher-tab"
             className="space-y-4"
           >
             <div>
-              <h3 className="text-[12px] font-medium text-[#E2F8EC]">Monetize a vault</h3>
+              <h3 className="text-[12px] font-medium text-[#E2F8EC]">Publish a vault</h3>
               <p className="mt-1 text-[11px] leading-5 text-[#A7B9B0]">
                 Package a dataset, set a NEAR price, and publish it to the marketplace. Files never leave this browser.
               </p>
