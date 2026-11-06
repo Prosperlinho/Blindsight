@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+/**
+ * Extracts plain text from an uploaded dataset file.
+ *
+ * This route only reports text that it actually recovered from the file. If a
+ * PDF or binary file yields no readable text, the request fails explicitly
+ * instead of substituting placeholder content.
+ */
 export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData();
@@ -13,13 +20,13 @@ export async function POST(req: NextRequest) {
     const buffer = Buffer.from(bytes);
     let extractedText = '';
 
-    // 1. Text, CSV, JSON, Markdown, Code Files
+    // 1. Text, CSV, JSON, Markdown, and code files.
     try {
       if (
-        file.type.includes('text') || 
-        file.type.includes('json') || 
+        file.type.includes('text') ||
+        file.type.includes('json') ||
         file.type.includes('csv') ||
-        /\.(txt|csv|json|md|ts|js|py|html)$/i.test(file.name)
+        /\.(txt|csv|json|md|markdown|ts|js|py|html)$/i.test(file.name)
       ) {
         extractedText = buffer.toString('utf-8');
       }
@@ -27,7 +34,7 @@ export async function POST(req: NextRequest) {
       console.warn('Direct text decoding failed:', e);
     }
 
-    // 2. PDF Parsing (Isolated Dynamic Import to prevent Serverless module crashes)
+    // 2. PDF parsing (isolated dynamic import to avoid serverless module crashes).
     if (!extractedText && (file.type.includes('pdf') || /\.pdf$/i.test(file.name))) {
       try {
         // pdf-parse exposes different shapes through its ESM and CJS entry points.
@@ -35,14 +42,15 @@ export async function POST(req: NextRequest) {
         const pdfModule: any = await import('pdf-parse');
         const pdfParse = pdfModule.default || pdfModule;
         const pdfData = await pdfParse(buffer);
-        extractedText = pdfData.text;
+        extractedText = typeof pdfData.text === 'string' ? pdfData.text : '';
       } catch (pdfErr) {
-        console.warn('pdf-parse failed, switching to raw buffer fallback:', pdfErr);
+        console.warn('pdf-parse failed while extracting text:', pdfErr);
       }
     }
 
-    // 3. Fallback: Extract printable text from raw binary buffer
-    if (!extractedText || extractedText.trim().length === 0) {
+    // 3. Last resort for other file types: strip control bytes from the raw
+    // buffer. This is real extracted text, not a fabricated placeholder.
+    if (!extractedText.trim()) {
       extractedText = buffer
         .toString('utf-8')
         .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, ' ')
@@ -50,9 +58,15 @@ export async function POST(req: NextRequest) {
         .trim();
     }
 
-    // 4. Guaranteed non-empty text payload for TEE ingestion
-    if (!extractedText || extractedText.length < 5) {
-      extractedText = `Document context [${file.name}] successfully encrypted and indexed in TEE vault.`;
+    if (extractedText.trim().length < 5) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            'No readable text could be extracted from this file. Upload a CSV, TXT, Markdown, or text-based PDF.',
+        },
+        { status: 422 },
+      );
     }
 
     return NextResponse.json({
@@ -60,7 +74,6 @@ export async function POST(req: NextRequest) {
       fileName: file.name,
       fileSize: file.size,
       text: extractedText,
-      antiProbingCheck: 'PASSED',
     });
   } catch (error) {
     console.error('Vault file parsing failed:', error);

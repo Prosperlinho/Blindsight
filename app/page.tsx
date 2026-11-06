@@ -1,288 +1,119 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import ConnectModal from "@/components/ConnectModal";
-import ExportKeyModal from "@/components/ExportKeyModal";
-import QueryVault from "@/components/QueryVault";
-import WalletDepositModal from "@/components/WalletDepositModal";
-import WalletSummary from "@/components/WalletSummary";
-import WalletWithdrawModal from "@/components/WalletWithdrawModal";
-import {
-  createDeposit,
-  createInstantWallet as generateEmbeddedWallet,
-  creditIncomingTransfer,
-  disconnectEmbeddedWallet,
-  ensureWalletLedger,
-  exportPrivateKey as getEmbeddedPrivateKey,
-  formatNearAmount,
-  getStoredEmbeddedWallet,
-  importPrivateKey as importEmbeddedPrivateKey,
-  ACCOUNTS_LEDGER_EVENT,
-  WALLET_SYNC_EVENT,
-  WALLETS_DB_STORAGE_KEY,
-  roundNear,
-  saveWalletLedger,
-  sendNear,
-  settleQueryPayment,
-  type QuerySettlementResult,
-  type WalletLedger,
-} from "@/lib/embeddedWallet";
-import { disconnectWallet, getWalletConnectionState, initializeWalletSelector, openWalletModal } from "@/lib/nearWallet";
+import QueryVault, { VAULT_TABS, type VaultTab } from "@/components/QueryVault";
+import { useWallet } from "@/components/WalletProvider";
+import { createAuditLogEntry, type AuditLogEntry } from "@/lib/auditLog";
+import { fetchNearBalance, type NearAccountBalance } from "@/lib/nearAccount";
+import { getTreasuryAccount, getTreasuryExplorerUrl } from "@/lib/paymentConfig";
+
+function formatAccountLabel(address: string): string {
+  if (address.length <= 18) return address;
+  return `${address.slice(0, 7)}…${address.slice(-4)}`;
+}
 
 export default function Home() {
-  const [providerAddress, setProviderAddress] = useState("provider.near");
-  const [walletAccountId, setWalletAccountId] = useState<string | null>(null);
-  const [walletSource, setWalletSource] = useState<"embedded" | "selector" | null>(null);
-  const [walletLedger, setWalletLedger] = useState<WalletLedger | null>(null);
+  const { accountId, isReady, error: walletContextError, signIn, signOut } = useWallet();
+  const [providerAddress, setProviderAddress] = useState("");
+  const [balance, setBalance] = useState<NearAccountBalance | null>(null);
+  const [balanceError, setBalanceError] = useState<{ accountId: string; message: string } | null>(null);
   const [isWalletLoading, setIsWalletLoading] = useState(false);
   const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
   const [walletError, setWalletError] = useState<string | null>(null);
-  const [walletSuccessMessage, setWalletSuccessMessage] = useState("");
-  const [walletModal, setWalletModal] = useState<"deposit" | "withdraw" | null>(null);
-  const [isExportKeyOpen, setIsExportKeyOpen] = useState(false);
+  const [auditLog, setAuditLog] = useState<AuditLogEntry[]>([]);
+  const [activeTab, setActiveTab] = useState<VaultTab>("gateway");
+  const [isWalletMenuOpen, setIsWalletMenuOpen] = useState(false);
+  const [copiedAddress, setCopiedAddress] = useState(false);
+  const walletMenuRef = useRef<HTMLDivElement>(null);
+  const treasuryAccount = getTreasuryAccount();
 
   useEffect(() => {
-    if (!walletSuccessMessage) return;
-    const timer = window.setTimeout(() => setWalletSuccessMessage(""), 5000);
-    return () => window.clearTimeout(timer);
-  }, [walletSuccessMessage]);
+    if (!isWalletMenuOpen) return;
 
-  useEffect(() => {
-    if (!walletAccountId) return;
-
-    const refreshCurrentWallet = () => setWalletLedger(ensureWalletLedger(walletAccountId));
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key === WALLETS_DB_STORAGE_KEY || event.key === null) refreshCurrentWallet();
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && !walletMenuRef.current?.contains(event.target)) {
+        setIsWalletMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setIsWalletMenuOpen(false);
     };
 
-    window.addEventListener(WALLET_SYNC_EVENT, refreshCurrentWallet);
-    window.addEventListener(ACCOUNTS_LEDGER_EVENT, refreshCurrentWallet);
-    window.addEventListener("storage", handleStorage);
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
     return () => {
-      window.removeEventListener(WALLET_SYNC_EVENT, refreshCurrentWallet);
-      window.removeEventListener(ACCOUNTS_LEDGER_EVENT, refreshCurrentWallet);
-      window.removeEventListener("storage", handleStorage);
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [walletAccountId]);
+  }, [isWalletMenuOpen]);
 
   useEffect(() => {
+    if (!accountId) return;
+
     let cancelled = false;
-    let cleanup: (() => void) | undefined;
+    let inFlight = false;
 
-    async function syncWalletState() {
+    const loadBalance = async () => {
+      if (inFlight) return;
+      inFlight = true;
       try {
-        const embeddedWallet = getStoredEmbeddedWallet();
-        if (embeddedWallet) {
-          setWalletAccountId(embeddedWallet.accountId);
-          setWalletSource("embedded");
-          setWalletLedger(ensureWalletLedger(embeddedWallet.accountId));
-        }
+        const next = await fetchNearBalance(accountId);
+        if (cancelled) return;
+        setBalance(next);
+        setBalanceError(null);
       } catch (error) {
-        setWalletError(error instanceof Error ? error.message : "Could not restore the embedded wallet.");
-      }
-
-      const selector = await initializeWalletSelector();
-      if (!selector || cancelled) return;
-
-      const update = () => {
-        const selectorState = getWalletConnectionState(selector);
-        let embeddedWallet: ReturnType<typeof getStoredEmbeddedWallet> = null;
-        try {
-          embeddedWallet = getStoredEmbeddedWallet();
-        } catch (error) {
-          setWalletError(error instanceof Error ? error.message : "Could not restore the embedded wallet.");
-        }
-        const accountId = selectorState.connected
-          ? selectorState.accountId
-          : embeddedWallet?.accountId ?? null;
-        const source = selectorState.connected ? "selector" : embeddedWallet ? "embedded" : null;
-
-        setWalletAccountId(accountId);
-        setWalletSource(source);
-        setWalletLedger((current) => {
-          if (!accountId) return null;
-          if (current?.accountId === accountId) return current;
-          return ensureWalletLedger(accountId);
+        if (cancelled) return;
+        setBalance(null);
+        setBalanceError({
+          accountId,
+          message: error instanceof Error
+            ? error.message
+            : "The NEAR testnet balance could not be read.",
         });
-        if (accountId) {
-          setIsConnectModalOpen(false);
-          setWalletError(null);
-        }
-      };
-
-      update();
-
-      const signedInSubscription = selector.on("signedIn", update);
-      const signedOutSubscription = selector.on("signedOut", update);
-      const accountsChangedSubscription = selector.on("accountsChanged", update);
-
-      cleanup = () => {
-        signedInSubscription.remove();
-        signedOutSubscription.remove();
-        accountsChangedSubscription.remove();
-      };
-    }
-
-    void syncWalletState().catch((error: unknown) => {
-      if (!cancelled) {
-        setWalletError(error instanceof Error ? error.message : "Wallet selector could not be initialized.");
+      } finally {
+        inFlight = false;
       }
-    });
+    };
 
+    void loadBalance();
+    const intervalId = window.setInterval(() => void loadBalance(), 15_000);
     return () => {
       cancelled = true;
-      cleanup?.();
+      window.clearInterval(intervalId);
     };
-  }, []);
+  }, [accountId]);
 
-  function handleSettleQuery(priceNear: number, vaultTitle: string, publisherAddress: string): QuerySettlementResult {
-    if (!walletAccountId) {
-      return { success: false, message: "Connect a wallet to settle this query." };
-    }
+  useEffect(() => {
+    if (!copiedAddress) return;
+    const timer = window.setTimeout(() => setCopiedAddress(false), 2_000);
+    return () => window.clearTimeout(timer);
+  }, [copiedAddress]);
 
-    const baseLedger = ensureWalletLedger(walletAccountId);
-    const settlement = settleQueryPayment(baseLedger, priceNear, vaultTitle, publisherAddress);
-    if (!settlement) {
-      return {
-        success: false,
-        message: `Insufficient balance. This query costs ${priceNear.toFixed(2)} NEAR and your wallet holds ${formatNearAmount(baseLedger.balanceNear)}.`,
-      };
-    }
-
-    setWalletLedger(settlement.senderLedger);
-    return { success: true, transactionId: settlement.senderTransaction.id };
-  }
-
-  function handleOpenWalletAction(action: "deposit" | "withdraw") {
-    setWalletModal(action);
-  }
-
-  function handleDeposit(amountNear: number): QuerySettlementResult {
-    if (!walletAccountId) {
-      return { success: false, message: "Connect a wallet before depositing." };
-    }
-
-    const baseLedger = ensureWalletLedger(walletAccountId);
-    const deposit = createDeposit(baseLedger, amountNear);
-    if (!deposit) {
-      return { success: false, message: "Enter a valid deposit amount." };
-    }
-
-    saveWalletLedger(deposit.ledger);
-    setWalletLedger(deposit.ledger);
-    setWalletSuccessMessage(`Deposited ${formatNearAmount(amountNear)}. New balance: ${formatNearAmount(deposit.ledger.balanceNear)}.`);
-    return { success: true, transactionId: deposit.transaction.id };
-  }
-
-  function handleReceiveTransfer(senderAddress: string, amountNear: number): QuerySettlementResult {
-    if (!walletAccountId) {
-      return { success: false, message: "Connect a wallet before receiving funds." };
-    }
-
-    let credit: ReturnType<typeof creditIncomingTransfer>;
-    try {
-      credit = creditIncomingTransfer(walletAccountId, senderAddress, amountNear);
-    } catch (error) {
-      return {
-        success: false,
-        message: error instanceof Error ? error.message : "The incoming transfer could not be saved.",
-      };
-    }
-    if (!credit) {
-      return { success: false, message: "Enter a sender address and a valid amount greater than 0." };
-    }
-
-    setWalletLedger(credit.ledger);
-    return { success: true, transactionId: credit.transaction.id };
-  }
-
-  function handleWithdraw(recipient: string, amountNear: number): QuerySettlementResult {
-    if (!walletAccountId) {
-      return { success: false, message: "Connect a wallet before sending funds." };
-    }
-
-    const baseLedger = ensureWalletLedger(walletAccountId);
-    const amount = roundNear(amountNear);
-    const destination = recipient.trim();
-    if (!Number.isFinite(amount) || amount <= 0) {
-      return { success: false, message: "Enter an amount greater than 0." };
-    }
-    if (!destination) {
-      return { success: false, message: "Enter a recipient NEAR address." };
-    }
-    if (destination.toLowerCase() === walletAccountId.trim().toLowerCase()) {
-      return { success: false, message: "Choose a recipient address different from your own wallet." };
-    }
-    if (amount > baseLedger.balanceNear + 1e-9) {
-      return {
-        success: false,
-        message: `Amount exceeds your available balance of ${formatNearAmount(baseLedger.balanceNear)}.`,
-      };
-    }
-
-    const transfer = sendNear(baseLedger, destination, amount);
-    if (!transfer) {
-      return { success: false, message: "Enter a valid recipient address and amount." };
-    }
-
-    setWalletLedger(transfer.senderLedger);
-    setWalletSuccessMessage(`Sent ${formatNearAmount(amount)} to ${destination}. Recipient credited: ${formatNearAmount(transfer.recipientLedger.balanceNear)} balance. Your new balance: ${formatNearAmount(transfer.senderLedger.balanceNear)}.`);
-    return { success: true, transactionId: transfer.senderTransaction.id };
-  }
+  const activeWalletError = walletError ?? walletContextError;
+  // Only show balance data that belongs to the currently connected account, so
+  // switching wallets can never display another account's on-chain balance.
+  const activeBalance = accountId && balance?.accountId === accountId ? balance : null;
+  const activeBalanceError = accountId && balanceError?.accountId === accountId
+    ? balanceError.message
+    : null;
 
   function handleWalletConnect() {
     setWalletError(null);
     setIsConnectModalOpen(true);
   }
 
-  async function handleCreateInstantWallet() {
-    setIsWalletLoading(true);
-    setWalletError(null);
-    try {
-      const wallet = generateEmbeddedWallet();
-      setWalletAccountId(wallet.accountId);
-      setWalletSource("embedded");
-      setWalletLedger(ensureWalletLedger(wallet.accountId));
-      setWalletSuccessMessage(`Instant Wallet Created! Address: ${wallet.accountId}`);
-      setIsConnectModalOpen(false);
-    } catch (error) {
-      setWalletError(error instanceof Error ? error.message : "Could not create an embedded wallet.");
-    } finally {
-      setIsWalletLoading(false);
-    }
-  }
-
-  function handleImportEmbeddedWallet(secretKey: string) {
-    setIsWalletLoading(true);
-    setWalletError(null);
-    try {
-      const accountId = importEmbeddedPrivateKey(secretKey);
-      setWalletAccountId(accountId);
-      setWalletSource("embedded");
-      setWalletLedger(ensureWalletLedger(accountId));
-      setWalletSuccessMessage(`Embedded wallet imported! Address: ${accountId}`);
-      setIsConnectModalOpen(false);
-    } catch (error) {
-      setWalletError(error instanceof Error ? error.message : "Could not import the embedded wallet key.");
-    } finally {
-      setIsWalletLoading(false);
-    }
-  }
-
-  function handleOpenExportKey() {
-    setWalletError(null);
-    setIsExportKeyOpen(true);
-  }
-
-  async function handleExistingWalletConnect() {
+  async function handleConnectExistingWallet() {
     setIsConnectModalOpen(false);
     setIsWalletLoading(true);
     setWalletError(null);
     try {
-      await openWalletModal();
+      await signIn();
     } catch (error) {
-      setWalletError(error instanceof Error ? error.message : "Could not open the wallet selector.");
+      setWalletError(
+        error instanceof Error ? error.message : "Could not open the NEAR wallet selector.",
+      );
       setIsConnectModalOpen(true);
     } finally {
       setIsWalletLoading(false);
@@ -291,201 +122,261 @@ export default function Home() {
 
   async function handleWalletDisconnect() {
     setIsWalletLoading(true);
+    setWalletError(null);
     try {
-      if (walletSource === "embedded") {
-        disconnectEmbeddedWallet();
-      } else {
-        await disconnectWallet();
-      }
-      const selector = await initializeWalletSelector();
-      const selectorState = getWalletConnectionState(selector);
-      const embeddedWallet = getStoredEmbeddedWallet();
-      const connectedAccountId = selectorState.connected
-        ? selectorState.accountId
-        : embeddedWallet?.accountId ?? null;
-      setWalletAccountId(connectedAccountId);
-      setWalletSource(selectorState.connected ? "selector" : embeddedWallet ? "embedded" : null);
-      setWalletLedger(connectedAccountId ? ensureWalletLedger(connectedAccountId) : null);
-      setWalletSuccessMessage("");
+      await signOut();
+      setBalance(null);
+      setBalanceError(null);
+      setIsWalletMenuOpen(false);
     } catch (error) {
-      setWalletError(error instanceof Error ? error.message : "Could not disconnect the wallet.");
+      setWalletError(
+        error instanceof Error ? error.message : "The NEAR wallet could not be disconnected.",
+      );
     } finally {
       setIsWalletLoading(false);
     }
   }
 
+  async function handleCopyAddress() {
+    if (!accountId) return;
+    try {
+      await navigator.clipboard.writeText(accountId);
+      setCopiedAddress(true);
+    } catch {
+      setWalletError("The browser blocked clipboard access. Copy the address manually.");
+    }
+  }
+
+  function handleAuditLog(message: string, txHash?: string) {
+    setAuditLog((current) => [createAuditLogEntry(message, txHash), ...current]);
+  }
+
   return (
-    <div className="min-h-screen text-[#F0FDF4]">
-      <header className="relative border-b border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl">
-        <div className="mx-auto flex h-[68px] max-w-[1500px] items-center justify-between px-5 sm:px-8">
-          <a href="#home" className="flex items-center gap-3" aria-label="BlindSight home">
-            <Image
-              src="/logo.png"
-              alt="Blindsight Logo"
-              width={36}
-              height={36}
-              className="h-9 w-9 object-contain drop-shadow-[0_0_10px_rgba(16,185,129,0.4)]"
-              priority
-            />
-            <span className="text-[13px] font-semibold tracking-[0.1em]">BlindSight</span>
-            <span className="hidden border-l border-emerald-500/20 pl-3 text-[11px] text-[#A7B9B0] sm:block">
-              Private data, useful answers
+    <div className="relative min-h-screen overflow-x-hidden text-slate-100">
+      <div aria-hidden="true" className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
+        <div className="absolute -left-24 top-0 size-[420px] rounded-full bg-cyan-500/10 blur-[140px]" />
+        <div className="absolute -right-24 top-24 size-[460px] rounded-full bg-purple-500/10 blur-[160px]" />
+        <div className="absolute bottom-0 left-1/3 size-[380px] rounded-full bg-blue-500/[0.07] blur-[150px]" />
+      </div>
+
+      <header className="sticky top-0 z-40 border-b border-white/10 bg-slate-950/70 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-[1500px] flex-wrap items-center gap-3 px-4 py-3 sm:px-6 lg:px-8">
+          <a href="#home" className="flex items-center gap-2.5" aria-label="BlindSight home">
+            <span className="grid size-9 place-items-center rounded-xl border border-cyan-400/30 bg-cyan-500/10 shadow-[0_0_25px_rgba(56,189,248,0.15)]">
+              <Image
+                src="/logo.png"
+                alt=""
+                width={26}
+                height={26}
+                className="h-6 w-6 object-contain"
+                priority
+              />
             </span>
+            <span className="text-sm font-semibold tracking-[0.08em] text-white">BlindSight</span>
           </a>
 
-          <div className="flex items-center gap-2 sm:gap-4">
-            <div className="hidden items-center gap-2 text-[11px] text-[#A7B9B0] xl:flex">
-              <span className="size-1.5 rounded-full bg-emerald-500" />
-              Query gateway preview
-            </div>
-            <div className="hidden h-5 w-px bg-[#047857] sm:block" />
-            <div
-              className="hidden items-center gap-2 border border-emerald-500/30 bg-emerald-950/40 px-2.5 py-1.5 text-[10px] text-emerald-400 lg:flex"
-              title="NEAR settlement is simulated in this prototype."
-            >
-              <span className="size-1.5 rounded-full bg-[#34D399]" />
-              <span>NEAR testnet · preview</span>
-            </div>
-            {walletAccountId ? (
-              <WalletSummary
-                ledger={walletLedger}
-                variant="header"
-                onBalanceClick={() => handleOpenWalletAction("withdraw")}
-                onReceiveClick={() => handleOpenWalletAction("deposit")}
-                onFaucetClick={() => { handleDeposit(1); }}
-                onDepositClick={() => handleOpenWalletAction("deposit")}
-                onWithdrawClick={() => handleOpenWalletAction("withdraw")}
-                onExportKeyClick={walletSource === "embedded" ? handleOpenExportKey : undefined}
-                onDisconnectClick={() => void handleWalletDisconnect()}
-              />
+          <div className="order-3 w-full animate-float sm:order-2 sm:w-auto sm:flex-1 sm:px-6">
+            <h1 className="animate-shimmer bg-gradient-to-r from-white via-cyan-100 to-purple-200 bg-clip-text text-center text-lg font-black leading-tight tracking-[-0.02em] text-transparent sm:text-xl lg:text-2xl">
+              Ask for the insight you need. Keep the source on your side.
+            </h1>
+          </div>
+
+          <div className="order-2 ml-auto flex items-center gap-2 sm:order-3 sm:ml-0">
+            {accountId ? (
+              <div ref={walletMenuRef} className="relative">
+                <button
+                  type="button"
+                  onClick={() => setIsWalletMenuOpen((open) => !open)}
+                  aria-expanded={isWalletMenuOpen}
+                  aria-haspopup="dialog"
+                  aria-label="Open wallet details"
+                  className="inline-flex animate-float items-center gap-2 rounded-full border border-white/10 bg-slate-900/70 px-3 py-1.5 text-[11px] text-slate-100 shadow-[0_0_20px_rgba(34,211,238,0.12)] backdrop-blur-2xl transition hover:border-cyan-400/40"
+                >
+                  <span className="size-1.5 rounded-full bg-cyan-400 animate-pulse-glow" />
+                  <span className="hidden font-mono sm:inline">{formatAccountLabel(accountId)}</span>
+                  <span className="sm:hidden">Wallet</span>
+                  {activeBalance && (
+                    <span className="hidden animate-shimmer bg-gradient-to-r from-cyan-200 via-white to-purple-200 bg-clip-text font-mono text-[10px] text-transparent md:inline">
+                      {activeBalance.near} NEAR
+                    </span>
+                  )}
+                  <span aria-hidden="true" className="text-[9px] text-slate-400">
+                    {isWalletMenuOpen ? "▲" : "▼"}
+                  </span>
+                </button>
+
+                {isWalletMenuOpen && (
+                  <div
+                    role="dialog"
+                    aria-label="Wallet details"
+                    className="absolute right-0 top-full z-50 mt-2 w-[min(340px,calc(100vw-24px))] overflow-hidden rounded-2xl border border-white/10 bg-slate-950/95 shadow-[0_24px_80px_rgba(0,0,0,0.65)] backdrop-blur-xl"
+                  >
+                    <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
+                      <div className="min-w-0">
+                        <div className="text-[9px] uppercase tracking-[0.16em] text-slate-500">
+                          NEAR testnet · real wallet
+                        </div>
+                        <div
+                          className="mt-0.5 truncate font-mono text-[11px] text-slate-100"
+                          title={accountId}
+                        >
+                          {accountId}
+                        </div>
+                      </div>
+                      <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-cyan-400/25 bg-cyan-500/10 px-2 py-0.5 text-[9px] font-medium text-cyan-200">
+                        <span className="size-1.5 rounded-full bg-cyan-400 animate-pulse-glow" />
+                        Testnet
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-2 p-3">
+                      <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5">
+                        <span className="block text-[9px] uppercase tracking-[0.14em] text-slate-500">
+                          On-chain balance
+                        </span>
+                        <span className="mt-1 block animate-shimmer bg-gradient-to-r from-cyan-200 via-white to-purple-200 bg-clip-text font-mono text-[15px] text-transparent">
+                          {activeBalance ? `${activeBalance.near} NEAR` : activeBalanceError ? "Unavailable" : "Reading RPC…"}
+                        </span>
+                        {activeBalanceError && (
+                          <span className="mt-1 block text-[9px] leading-4 text-rose-300">
+                            {activeBalanceError}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-1 border-t border-white/10 p-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleCopyAddress()}
+                        className="rounded-lg px-2 py-2 text-[10px] text-slate-300 transition hover:bg-white/5 hover:text-cyan-200"
+                      >
+                        {copiedAddress ? "Copied ✓" : "Copy address"}
+                      </button>
+                      <a
+                        href={getTreasuryExplorerUrl(accountId)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="rounded-lg px-2 py-2 text-center text-[10px] text-slate-300 transition hover:bg-white/5 hover:text-cyan-200"
+                      >
+                        View on NearBlocks ↗
+                      </a>
+                    </div>
+
+                    <div className="border-t border-white/10 p-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleWalletDisconnect()}
+                        disabled={isWalletLoading}
+                        className="w-full rounded-xl border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-[11px] font-semibold text-rose-200 transition hover:border-rose-300/60 hover:bg-rose-500/20 disabled:cursor-wait disabled:opacity-60"
+                      >
+                        {isWalletLoading ? "Disconnecting…" : "Disconnect"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             ) : (
               <button
                 type="button"
-                onClick={() => void handleWalletConnect()}
-                disabled={isWalletLoading}
-                className="flex items-center gap-2 border border-emerald-500/40 bg-emerald-500 px-3 py-2 text-[11px] font-semibold text-slate-950 shadow-lg shadow-emerald-500/20 transition-all hover:bg-emerald-400 disabled:cursor-wait disabled:opacity-60"
+                onClick={handleWalletConnect}
+                disabled={isWalletLoading || !isReady}
+                className="rounded-full bg-gradient-to-r from-cyan-500 to-purple-500 px-4 py-2 text-[11px] font-semibold text-slate-950 shadow-[0_0_25px_rgba(34,211,238,0.25)] transition-all duration-300 hover:brightness-110 disabled:cursor-wait disabled:opacity-60"
               >
-                <span>{isWalletLoading ? "Connecting..." : "Connect Wallet"}</span>
+                {isWalletLoading ? "Opening…" : isReady ? "Connect Wallet" : "Initializing…"}
               </button>
             )}
           </div>
         </div>
-
       </header>
 
-      <main id="home" className="mx-auto max-w-[1420px] px-5 pb-12 pt-9 sm:px-8 sm:pt-12">
-        <section className="mb-9 grid gap-8 border-b border-emerald-500/20 pb-8 lg:grid-cols-[minmax(0,1.35fr)_minmax(260px,0.65fr)] lg:items-end">
-          <div>
-            <p className="mb-4 text-[12px] text-[#A7B9B0]">A private data workspace</p>
-            <h1 className="max-w-[780px] font-serif text-[clamp(42px,7vw,82px)] leading-[0.98] tracking-[-0.045em] text-[#F0FDF4]">
-              Questions out.
-              <br />
-              Files stay in<span className="text-[#10B981]">.</span>
-            </h1>
-            <p className="mt-5 max-w-[540px] text-[14px] leading-6 text-[#A7B9B0]">
-              Ask for the insight you need. Keep the source on your side.
-            </p>
+      <div className="relative z-30 px-4 pt-5 sm:px-6">
+        <nav
+          aria-label="Vault sections"
+          className="mx-auto max-w-xl animate-fade-up rounded-full border border-white/10 bg-slate-900/80 p-1.5 shadow-2xl shadow-cyan-500/10 backdrop-blur-2xl"
+        >
+          <div role="tablist" aria-label="Vault views" className="flex items-center gap-1">
+            {VAULT_TABS.map((tab) => {
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  id={`${tab.id}-tab`}
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  aria-controls={`${tab.id}-panel`}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex-1 whitespace-nowrap rounded-full border px-2 py-2 text-[10px] font-medium transition-all duration-300 ease-in-out sm:px-3 sm:text-[11px] ${
+                    isActive
+                      ? "border-cyan-400/50 bg-gradient-to-r from-cyan-500/20 to-purple-500/20 text-white shadow-[0_0_15px_rgba(6,182,212,0.3)]"
+                      : "border-transparent text-slate-400 hover:bg-white/5 hover:text-white"
+                  }`}
+                >
+                  <span className={isActive ? "inline-block animate-float" : "inline-block"}>
+                    <span
+                      className={
+                        isActive
+                          ? "animate-shimmer bg-gradient-to-r from-white via-cyan-100 to-purple-200 bg-clip-text text-transparent"
+                          : undefined
+                      }
+                    >
+                      {tab.label}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
           </div>
-          <div aria-hidden="true" className="hidden min-h-[150px] items-end justify-end lg:flex">
-            <svg viewBox="0 0 360 150" fill="none" className="w-full max-w-[370px] text-[#34D399]">
-              <path d="M56 78h110m28 0h110" stroke="currentColor" strokeOpacity=".5" strokeWidth="1.5" />
-              <path d="m157 73 9 5-9 5m46-10-9 5 9 5" stroke="#10B981" strokeWidth="1.5" />
-              <rect x="14" y="34" width="70" height="88" rx="1" stroke="currentColor" strokeOpacity=".65" />
-              <path d="M29 56h39M29 68h31M29 80h34M29 92h23" stroke="currentColor" strokeOpacity=".65" />
-              <circle cx="180" cy="78" r="31" stroke="currentColor" strokeOpacity=".7" />
-              <circle cx="180" cy="78" r="20" stroke="#10B981" strokeOpacity=".75" />
-              <path d="M174 78h12m-6-6v12" stroke="#10B981" strokeWidth="1.4" />
-              <rect x="276" y="45" width="70" height="66" rx="1" stroke="currentColor" strokeOpacity=".65" />
-              <path d="M291 64h39m-39 12h32m-32 12h24" stroke="currentColor" strokeOpacity=".65" />
-              <text x="14" y="139" fill="currentColor" fontSize="9">SOURCE</text>
-              <text x="151" y="128" fill="currentColor" fontSize="9">PRIVATE QUERY</text>
-              <text x="276" y="128" fill="currentColor" fontSize="9">ANSWER</text>
-            </svg>
-          </div>
-        </section>
+        </nav>
+      </div>
 
+      <main id="home" className="mx-auto max-w-5xl px-4 pb-16 pt-5 sm:px-6">
         <QueryVault
-          providerAddress={providerAddress}
+          providerAddress={providerAddress || accountId || ""}
           onProviderAddressChange={setProviderAddress}
-          walletLedger={walletLedger}
-          onSettleQuery={handleSettleQuery}
+          nearAccountId={accountId}
+          walletBalanceNear={activeBalance?.near ?? null}
+          walletBalanceError={activeBalanceError}
+          treasuryAccount={treasuryAccount}
+          auditLog={auditLog}
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          onAuditLog={handleAuditLog}
         />
 
-        <footer className="mt-7 flex flex-col gap-3 border-t border-emerald-500/20 pt-4 text-[10px] text-[#7D9187] sm:flex-row sm:items-center sm:justify-between">
+        <footer className="mx-auto mt-8 flex max-w-3xl flex-col gap-2 border-t border-white/10 pt-4 text-[10px] text-slate-500 sm:flex-row sm:items-center sm:justify-between">
           <span>BlindSight · Confidential data marketplace</span>
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-            <span>NEAR settlement · simulated</span>
-            <span>TEE verification · simulated</span>
-            <span>Prototype build</span>
-          </div>
+          <span className="inline-flex items-center gap-2">
+            <span className="size-1.5 rounded-full bg-cyan-400 animate-pulse-glow" />
+            Real NEAR testnet payment · real NEAR AI inference
+          </span>
         </footer>
       </main>
-      {walletError && !isConnectModalOpen && (
+
+      {activeWalletError && !isConnectModalOpen && (
         <div
           role="alert"
-          className="fixed bottom-5 left-5 z-20 flex max-w-[min(420px,calc(100vw-40px))] items-start gap-4 border border-[#7F1D1D]/50 bg-[#261719] px-4 py-3 text-xs leading-5 text-[#FCA5A5] shadow-2xl shadow-black/40"
+          className="fixed bottom-5 left-5 z-20 flex max-w-[min(420px,calc(100vw-40px))] items-start gap-4 rounded-xl border border-rose-400/30 bg-slate-950/95 px-4 py-3 text-xs leading-5 text-rose-200 shadow-2xl shadow-rose-950/40 backdrop-blur-xl"
         >
-          <span>{walletError}</span>
+          <span>{activeWalletError}</span>
           <button
             type="button"
             onClick={() => setWalletError(null)}
             aria-label="Dismiss wallet error"
-            className="text-sm text-[#FCA5A5]/70 hover:text-[#FCA5A5]"
+            className="text-sm text-rose-300/70 hover:text-rose-100"
           >
             ×
           </button>
         </div>
       )}
-      {walletSuccessMessage && (
-        <div
-          role="status"
-          className="fixed bottom-5 right-5 z-20 w-[min(460px,calc(100vw-40px))] border border-emerald-500/20 bg-emerald-950/40 p-4 text-xs leading-5 text-[#E2F8EC] shadow-2xl shadow-black/40"
-        >
-          <div className="flex items-start justify-between gap-4">
-            <span className="break-all">{walletSuccessMessage}</span>
-            <button
-              type="button"
-              onClick={() => setWalletSuccessMessage("")}
-              aria-label="Dismiss wallet created message"
-              className="shrink-0 text-sm text-[#A7B9B0] hover:text-[#F0FDF4]"
-            >
-              ×
-            </button>
-          </div>
-        </div>
-      )}
-      {isExportKeyOpen && (
-        <ExportKeyModal
-          open
-          accountId={walletAccountId ?? ""}
-          onClose={() => setIsExportKeyOpen(false)}
-          getPrivateKey={getEmbeddedPrivateKey}
-          onError={setWalletError}
-        />
-      )}
-      {walletModal === "deposit" && walletLedger && (
-        <WalletDepositModal
-          ledger={walletLedger}
-          onClose={() => setWalletModal(null)}
-          onDeposit={handleDeposit}
-          onReceiveTransfer={handleReceiveTransfer}
-        />
-      )}
-      {walletModal === "withdraw" && walletLedger && (
-        <WalletWithdrawModal
-          ledger={walletLedger}
-          onClose={() => setWalletModal(null)}
-          onWithdraw={handleWithdraw}
-        />
-      )}
+
       <ConnectModal
         open={isConnectModalOpen}
         isLoading={isWalletLoading}
-        error={walletError}
+        error={activeWalletError}
         onClose={() => setIsConnectModalOpen(false)}
-        onCreateInstantWallet={() => void handleCreateInstantWallet()}
-        onImportPrivateKey={handleImportEmbeddedWallet}
-        onConnectExistingWallet={() => void handleExistingWalletConnect()}
+        onConnect={() => void handleConnectExistingWallet()}
       />
     </div>
   );

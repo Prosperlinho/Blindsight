@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  useCallback,
+  useContext,
   useEffect,
   useRef,
   useState,
@@ -9,47 +9,59 @@ import {
   type DragEvent,
   type FormEvent,
 } from "react";
-import {
-  ACCOUNTS_LEDGER_EVENT,
-  INITIAL_TEST_BALANCE_NEAR,
-  WALLET_DEPOSIT_EVENT,
-  WALLET_SYNC_EVENT,
-  WALLETS_DB_STORAGE_KEY,
-  ensureWalletLedger,
-  fetchNearRpcBalance,
-  formatNearAmount,
-  loadAccountsLedger,
-  normalizeAccountAddress,
-  roundNear,
-  saveAccountsLedger,
-  saveWalletLedger,
-  seedAccountEarnings,
-  type AccountsLedger,
-  type QuerySettlementResult,
-  type WalletLedger,
-  type WalletTransaction,
-} from "@/lib/embeddedWallet";
+import PaymentAudit from "@/components/PaymentAudit";
+import { WalletContext } from "@/components/WalletProvider";
+import type { AuditLogEntry } from "@/lib/auditLog";
+import { DEMO_VAULTS, type MarketplaceVault } from "@/lib/demoVaults";
+import { isValidNearAccountId } from "@/lib/nearAccount";
+import { extractTransactionHash, transferNear } from "@/lib/near-transfers";
+import { getTransactionExplorerUrl, getTreasuryExplorerUrl } from "@/lib/paymentConfig";
 
 type QueryVaultProps = {
   providerAddress: string;
   onProviderAddressChange: (address: string) => void;
-  walletLedger: WalletLedger | null;
-  onSettleQuery: (priceNear: number, vaultTitle: string, publisherAddress: string) => QuerySettlementResult;
+  nearAccountId: string | null;
+  walletBalanceNear: string | null;
+  walletBalanceError: string | null;
+  treasuryAccount: string;
+  auditLog: AuditLogEntry[];
+  activeTab: VaultTab;
+  onTabChange: (tab: VaultTab) => void;
+  onAuditLog: (message: string, txHash?: string) => void;
 };
 
-type ViewTab = "explorer" | "publisher";
+export type VaultTab = "gateway" | "publish" | "explorer" | "audit";
 
-type MarketplaceVault = {
-  id: string;
-  title: string;
-  description: string;
-  category: string;
-  seller: string;
-  priceNear: string;
-  rows: number;
-  updated: string;
-  dataset: string;
-  earningsNear: number;
+export const VAULT_TABS: { id: VaultTab; label: string }[] = [
+  { id: "gateway", label: "Query Gateway" },
+  { id: "publish", label: "Publish Vault" },
+  { id: "explorer", label: "Vault Explorer" },
+  { id: "audit", label: "Audit Log" },
+];
+
+type QueryStage =
+  | "idle"
+  | "signing"
+  | "verifying"
+  | "confirmed"
+  | "inferring"
+  | "ready"
+  | "error";
+
+type VerifiedPaymentView = {
+  txHash: string;
+  amountNear: string;
+  payerAccountId: string;
+  receiverId: string;
+  blockHeight: number | null;
+  explorerUrl: string;
+};
+
+type QueryExecution = {
+  vault: MarketplaceVault;
+  submittedQuery: string;
+  payerAccountId: string;
+  payment: VerifiedPaymentView;
 };
 
 type DraftFile = {
@@ -64,115 +76,20 @@ type VaultAnswer = {
   priceNear: string;
   insight: string;
   attestationToken: string;
+  attestationSimulated: boolean;
+  onChainTransactionHash: string;
+  amountNear: string;
+  receiverId: string;
+  blockHeight: number | null;
+  model: string;
+  inferenceProvider: string;
 };
-
-type AuditLogEntry = {
-  id: string;
-  message: string;
-  timestamp: string;
-};
-
-const INITIAL_VAULTS: MarketplaceVault[] = [
-  {
-    id: "q3-financial-market-demand",
-    title: "Q3 Financial & Market Demand",
-    description: "Audited revenue, retention, and demand signals from a private SaaS operator.",
-    category: "Finance",
-    seller: "northstar.near",
-    priceNear: "0.1",
-    rows: 18420,
-    updated: "2h ago",
-    earningsNear: 184.6,
-    dataset: `Q3 Financial & Market Demand
-Total revenue: $4.2M, up 34% year over year.
-Net revenue retention: 118% across enterprise accounts.
-TEE query volume: 1.42M queries processed in Q3.
-Active vault monetizers: 850 enterprise accounts.
-Projected 2026 revenue: $22.6M at the current growth rate.
-Top demand signal: confidential analytics for regulated financial datasets.
-Gross margin: 81% after inference and settlement costs.
-Churn: 2.1% monthly, concentrated in self-serve accounts.
-Largest risk: inference cost volatility during peak demand.`,
-  },
-  {
-    id: "medical-research-cohort-2026",
-    title: "Medical Research Cohort 2026",
-    description: "De-identified cohort outcomes and biomarker signals from a 2026 multi-site study.",
-    category: "Health",
-    seller: "cohortlab.near",
-    priceNear: "0.15",
-    rows: 12480,
-    updated: "5h ago",
-    earningsNear: 96.25,
-    dataset: `Medical Research Cohort 2026
-De-identified participants: 12,480 across 14 sites.
-Primary endpoint: 23% reduction in biomarker variance.
-Adverse event rate: 1.8%, with no severe events reported.
-Median follow-up: 18 months.
-Strongest cohort signal: responders show elevated IL-6 at baseline.
-Data retention: all records remain inside the enclave.
-Largest risk: missing longitudinal samples for 6% of participants.
-Projected enrollment for 2027: 18,000 participants.`,
-  },
-  {
-    id: "solidity-security-audit-report",
-    title: "Solidity Security Audit Report",
-    description: "Findings, coverage, and risk posture for a production DeFi protocol audit.",
-    category: "Security",
-    seller: "auditdao.near",
-    priceNear: "0.08",
-    rows: 342,
-    updated: "1d ago",
-    earningsNear: 42.18,
-    dataset: `Solidity Security Audit Report
-Contracts reviewed: 9 core contracts and 3 upgradeable proxies.
-Critical findings: 0 open, 2 resolved.
-High findings: 1 open, 5 resolved.
-Reentrancy: guarded with checks-effects-interactions and a mutex.
-Access control: 2 admin roles, both behind a 48-hour timelock.
-Oracle risk: single-source price feed flagged for hardening.
-Test coverage: 94% branch coverage across critical paths.
-Largest risk: privileged upgrade path requires operational discipline.`,
-  },
-  {
-    id: "defi-liquidity-insights",
-    title: "DeFi Liquidity Insights",
-    description: "Live-style liquidity, volume, and yield signals across six managed pools.",
-    category: "DeFi",
-    seller: "liquidity.near",
-    priceNear: "0.12",
-    rows: 9640,
-    updated: "3h ago",
-    earningsNear: 128.9,
-    dataset: `DeFi Liquidity Insights
-Total value locked: $186M across 6 pools.
-Stablecoin pool depth: $74M with 0.04% median slippage on $1M swaps.
-30-day volume: $1.9B, up 41% month over month.
-Liquidity utilization: 68% average across active pools.
-Top yield opportunity: ETH/USDC pool at 9.2% APY.
-Impermanent loss: 1.4% average for the past 30 days.
-Largest risk: concentrated LP ownership in the newest pool.
-Projected TVL for Q1 2027: $240M at current inflow.`,
-  },
-];
 
 const QUERY_SUGGESTIONS = [
   "Summarize the headline metrics",
   "What are the biggest risks?",
   "Show the strongest growth signal",
 ];
-
-const STOP_WORDS = new Set([
-  "about", "above", "after", "again", "against", "also", "among", "and", "are", "because",
-  "been", "before", "being", "between", "both", "but", "can", "could", "data", "dataset",
-  "did", "does", "doing", "each", "for", "from", "give", "had", "has", "have", "here",
-  "how", "into", "its", "just", "main", "more", "most", "not", "now", "off", "once",
-  "only", "other", "our", "out", "over", "please", "query", "same", "she", "should",
-  "show", "some", "such", "tell", "than", "that", "the", "their", "them", "then",
-  "there", "these", "they", "this", "those", "through", "under", "until", "very",
-  "vault", "was", "were", "what", "when", "where", "which", "while", "who", "why",
-  "will", "with", "would", "you", "your",
-]);
 
 const numberFormatter = new Intl.NumberFormat("en-US");
 
@@ -195,65 +112,97 @@ function normalizePrice(raw: string) {
   return String(Number(parsed.toFixed(4)));
 }
 
-function createAttestationToken() {
-  const bytes = new Uint8Array(8);
-  window.crypto.getRandomValues(bytes);
-  return `mock_tee_${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
-}
-
 function estimateRows(dataset: string) {
   const records = dataset.split("\n").filter((line) => line.trim().length > 0).length;
-  return Math.max(1, Math.round(records * 1.4));
+  return Math.max(1, records);
 }
 
-function buildVaultInsight(vault: MarketplaceVault, query: string) {
-  const terms = Array.from(new Set(
-    query.toLowerCase().match(/[a-z0-9]{3,}/g)?.filter((term) => !STOP_WORDS.has(term)) ?? [],
-  ));
-  const lines = vault.dataset
-    .split("\n")
-    .map((line) => line.replace(/^[-*•]\s*/, "").trim())
-    .filter((line) => line.length > 2);
+function toVerifiedPayment(
+  payload: unknown,
+  fallbackTxHash: string,
+  payerAccountId: string,
+): VerifiedPaymentView {
+  const record = typeof payload === "object" && payload !== null
+    ? payload as Record<string, unknown>
+    : {};
+  const txHash = typeof record.txHash === "string" ? record.txHash : fallbackTxHash;
+  return {
+    txHash,
+    amountNear: typeof record.amountNear === "string" ? record.amountNear : "",
+    payerAccountId: typeof record.payerAccountId === "string"
+      ? record.payerAccountId
+      : payerAccountId,
+    receiverId: typeof record.receiverId === "string" ? record.receiverId : "",
+    blockHeight: typeof record.blockHeight === "number" ? record.blockHeight : null,
+    explorerUrl: getTransactionExplorerUrl(txHash),
+  };
+}
 
-  const ranked = lines
-    .map((line) => {
-      const lower = line.toLowerCase();
-      const score = terms.reduce((total, term) => total + (lower.includes(term) ? 1 : 0), 0);
-      return { line, score };
-    })
-    .filter((entry) => entry.score > 0)
-    .sort((left, right) => right.score - left.score)
-    .slice(0, 3)
-    .map((entry) => entry.line);
+type PaymentStepState = "pending" | "active" | "done" | "error";
 
-  const numericFallback = lines.filter((line) => /\d/.test(line)).slice(0, 3);
-  const evidence = ranked.length ? ranked : numericFallback.length ? numericFallback : lines.slice(0, 3);
-  const bullets = evidence.map((line) => `- ${line}`).join("\n");
+function PaymentStep({
+  index,
+  label,
+  detail,
+  state,
+}: {
+  index: number;
+  label: string;
+  detail: string;
+  state: PaymentStepState;
+}) {
+  const tone: Record<PaymentStepState, string> = {
+    pending: "border-white/10 bg-slate-950/60 text-slate-400",
+    active: "border-cyan-400/40 bg-cyan-500/10 text-cyan-100",
+    done: "border-emerald-400/30 bg-emerald-500/10 text-emerald-100",
+    error: "border-rose-400/30 bg-rose-500/10 text-rose-100",
+  };
+  const badge: Record<PaymentStepState, string> = {
+    pending: "border-white/15 text-slate-400",
+    active: "border-cyan-400/40 bg-cyan-400/15 text-cyan-200 animate-pulse",
+    done: "border-emerald-400/40 bg-emerald-400/15 text-emerald-200",
+    error: "border-rose-400/40 bg-rose-400/15 text-rose-200",
+  };
+  const marker = state === "done" ? "✓" : state === "error" ? "!" : String(index);
 
-  return [
-    `Simulated TEE analysis for "${vault.title}"`,
-    `Question: "${query}"`,
-    "",
-    bullets,
-    "",
-    `This answer was assembled in your browser from the vault's published sample of ${formatNumber(vault.rows)} rows. No network request or real hardware attestation was performed.`,
-  ].join("\n");
+  return (
+    <div className={`flex items-start gap-2 rounded-lg border px-3 py-2 ${tone[state]}`}>
+      <span
+        className={`mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border text-[10px] font-semibold ${badge[state]}`}
+        aria-hidden="true"
+      >
+        {marker}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-[10px] font-semibold uppercase tracking-[0.08em]">{label}</span>
+        <span className="mt-0.5 block text-[10px] leading-4 opacity-80">{detail}</span>
+      </span>
+    </div>
+  );
 }
 
 export default function QueryVault({
   providerAddress,
   onProviderAddressChange,
-  walletLedger,
-  onSettleQuery,
+  nearAccountId,
+  walletBalanceNear,
+  walletBalanceError,
+  treasuryAccount,
+  auditLog,
+  activeTab,
+  onTabChange,
+  onAuditLog,
 }: QueryVaultProps) {
-  const [activeTab, setActiveTab] = useState<ViewTab>("explorer");
-  const [vaults, setVaults] = useState<MarketplaceVault[]>(INITIAL_VAULTS);
-  const [selectedVaultId, setSelectedVaultId] = useState<string>(INITIAL_VAULTS[0].id);
+  const walletContext = useContext(WalletContext);
+  const walletAccountId = walletContext?.accountId ?? null;
+  const [vaults, setVaults] = useState<MarketplaceVault[]>(DEMO_VAULTS);
+  const [selectedVaultId, setSelectedVaultId] = useState<string>(DEMO_VAULTS[0].id);
   const [query, setQuery] = useState("");
-  const [isExecuting, setIsExecuting] = useState(false);
+  const [stage, setStage] = useState<QueryStage>("idle");
+  const [verifiedPayment, setVerifiedPayment] = useState<VerifiedPaymentView | null>(null);
+  const [retryContext, setRetryContext] = useState<QueryExecution | null>(null);
   const [answer, setAnswer] = useState<VaultAnswer | null>(null);
-  const [auditLog, setAuditLog] = useState<AuditLogEntry[]>([]);
-  const [accountsLedger, setAccountsLedger] = useState<AccountsLedger>({});
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
 
   const [draftFiles, setDraftFiles] = useState<DraftFile[]>([]);
@@ -264,20 +213,12 @@ export default function QueryVault({
   const [draftNotice, setDraftNotice] = useState("");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const timeoutRef = useRef<number | null>(null);
   const runIdRef = useRef(0);
-  const observedAccountRef = useRef("");
-  const observedBalanceRef = useRef<number | null>(null);
-  const observedTransactionIdsRef = useRef(new Set<string>());
-  const activeAccountId = walletLedger?.accountId;
 
-  const showNotification = useCallback((message: string) => {
-    setNotification(message);
-  }, []);
-
-  useEffect(() => () => {
-    if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
-  }, []);
+  const isExecuting = stage === "signing"
+    || stage === "verifying"
+    || stage === "confirmed"
+    || stage === "inferring";
 
   useEffect(() => {
     if (!notification) return;
@@ -285,282 +226,245 @@ export default function QueryVault({
     return () => window.clearTimeout(timer);
   }, [notification]);
 
-  useEffect(() => {
-    const accounts = loadAccountsLedger();
-    let changed = false;
-    for (const vault of INITIAL_VAULTS) {
-      const seeded = seedAccountEarnings(accounts, vault.seller, vault.earningsNear);
-      if (seeded.changed) changed = true;
-    }
-    if (changed) saveAccountsLedger(accounts);
-    const timer = window.setTimeout(() => setAccountsLedger(accounts), 0);
-    return () => window.clearTimeout(timer);
-  }, []);
-
-  useEffect(() => {
-    if (!walletLedger) return;
-    const key = normalizeAccountAddress(walletLedger.accountId);
-    const timer = window.setTimeout(() => {
-      setAccountsLedger((current) => ({ ...current, [key]: walletLedger }));
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [walletLedger]);
-
-  useEffect(() => {
-    if (!walletLedger) {
-      observedAccountRef.current = "";
-      observedBalanceRef.current = null;
-      observedTransactionIdsRef.current.clear();
-      return;
-    }
-
-    const accountKey = normalizeAccountAddress(walletLedger.accountId);
-    if (observedAccountRef.current !== accountKey) {
-      observedAccountRef.current = accountKey;
-      observedTransactionIdsRef.current = new Set(
-        walletLedger.transactions.map((transaction) => transaction.id),
-      );
-    } else {
-      for (const transaction of walletLedger.transactions) {
-        observedTransactionIdsRef.current.add(transaction.id);
-      }
-    }
-    observedBalanceRef.current = walletLedger.balanceNear;
-  }, [walletLedger]);
-
-  useEffect(() => {
-    if (!activeAccountId) return;
-
-    const accountId = activeAccountId;
-    let cancelled = false;
-    let polling = false;
-
-    const syncOnChainBalance = async () => {
-      if (polling) return;
-      polling = true;
-      try {
-        const rpcBalance = await fetchNearRpcBalance(accountId);
-        if (cancelled || rpcBalance === null) return;
-
-        const currentLedger = ensureWalletLedger(accountId);
-        const balanceDelta = roundNear(rpcBalance - currentLedger.balanceNear);
-        if (balanceDelta === 0) return;
-
-        const transaction: WalletTransaction | null = balanceDelta > 0
-          ? {
-              id: `tx-near-testnet-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-              type: "DEPOSIT_CREDIT",
-              amount: `+${balanceDelta.toFixed(2)} NEAR`,
-              description: `Received +${balanceDelta.toFixed(2)} NEAR from NEAR Testnet`,
-              status: "SUCCESS",
-              timestamp: new Date().toLocaleTimeString(),
-            }
-          : null;
-        const updatedLedger: WalletLedger = {
-          ...currentLedger,
-          balanceNear: rpcBalance,
-          transactions: transaction
-            ? [transaction, ...currentLedger.transactions]
-            : currentLedger.transactions,
-        };
-
-        saveWalletLedger(updatedLedger);
-        window.dispatchEvent(new CustomEvent(WALLET_SYNC_EVENT, {
-          detail: {
-            fromAddr: "NEAR Testnet",
-            toAddr: accountId,
-            amount: balanceDelta,
-            transactionId: transaction?.id,
-          },
-        }));
-      } finally {
-        polling = false;
-      }
-    };
-
-    void syncOnChainBalance();
-    const intervalId = window.setInterval(() => {
-      void syncOnChainBalance();
-    }, 10_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, [activeAccountId]);
-
-  useEffect(() => {
-    const refreshAccounts = () => setAccountsLedger(loadAccountsLedger());
-    window.addEventListener(ACCOUNTS_LEDGER_EVENT, refreshAccounts);
-    return () => window.removeEventListener(ACCOUNTS_LEDGER_EVENT, refreshAccounts);
-  }, []);
-
-  useEffect(() => {
-    const activeAccountId = walletLedger?.accountId;
-    if (!activeAccountId) return;
-    const accountKey = normalizeAccountAddress(activeAccountId);
-
-    const handleWalletUpdate = (event: Event) => {
-      const detail = event.type === WALLET_SYNC_EVENT
-        ? (event as CustomEvent<{ fromAddr?: unknown; toAddr?: unknown }>).detail
-        : undefined;
-      if (typeof detail?.toAddr === "string" && normalizeAccountAddress(detail.toAddr) !== accountKey) {
-        setAccountsLedger(loadAccountsLedger());
-        return;
-      }
-
-      const storedDb = window.localStorage.getItem(WALLETS_DB_STORAGE_KEY);
-      if (!storedDb) {
-        setAccountsLedger(loadAccountsLedger());
-        return;
-      }
-
-      let parsedDb: unknown;
-      try {
-        parsedDb = JSON.parse(storedDb);
-      } catch (error) {
-        console.error("Could not parse the updated wallet ledger.", error);
-        return;
-      }
-      if (typeof parsedDb !== "object" || parsedDb === null || Array.isArray(parsedDb)) {
-        setAccountsLedger(loadAccountsLedger());
-        return;
-      }
-
-      const walletsDb = parsedDb as Record<string, unknown>;
-      const storedLedger = walletsDb[accountKey];
-      if (typeof storedLedger !== "object" || storedLedger === null || Array.isArray(storedLedger)) {
-        setAccountsLedger(loadAccountsLedger());
-        return;
-      }
-
-      const ledgerRecord = storedLedger as {
-        balanceNear?: unknown;
-        balance?: unknown;
-        transactions?: unknown;
-      };
-      const nextBalance = Number(ledgerRecord.balanceNear ?? ledgerRecord.balance);
-      if (!Number.isFinite(nextBalance)) {
-        setAccountsLedger(loadAccountsLedger());
-        return;
-      }
-
-      const transactions = Array.isArray(ledgerRecord.transactions)
-        ? ledgerRecord.transactions.filter((transaction): transaction is WalletTransaction => {
-          if (typeof transaction !== "object" || transaction === null) return false;
-          const candidate = transaction as Partial<WalletTransaction>;
-          return typeof candidate.id === "string" && typeof candidate.type === "string";
-        })
-        : [];
-      const newCredit = transactions.find((transaction) =>
-        transaction.type === "DEPOSIT_CREDIT" &&
-        !observedTransactionIdsRef.current.has(transaction.id),
-      );
-      const previousBalance = observedBalanceRef.current ?? 0;
-      const receivedAmount = roundNear(nextBalance - previousBalance);
-
-      setAccountsLedger(parsedDb as AccountsLedger);
-      for (const transaction of transactions) {
-        observedTransactionIdsRef.current.add(transaction.id);
-      }
-      observedBalanceRef.current = nextBalance;
-
-      if (receivedAmount <= 0) return;
-      const sender = typeof detail?.fromAddr === "string"
-        ? detail.fromAddr
-        : newCredit?.recipient ??
-          newCredit?.description.match(/received from (.+)$/i)?.[1] ??
-          "unknown sender";
-      showNotification(
-        sender === "NEAR Testnet"
-          ? `Received +${receivedAmount.toFixed(2)} NEAR from NEAR Testnet`
-          : `Received +${receivedAmount.toFixed(2)} NEAR · Credited from ${sender}`,
-      );
-    };
-
-    const handleDeposit = (event: Event) => {
-      setAccountsLedger(loadAccountsLedger());
-      const detail = (event as CustomEvent<{ amount?: number }>).detail;
-      showNotification(
-        typeof detail?.amount === "number"
-          ? `Deposit complete · ${formatNearAmount(detail.amount)} added to your wallet.`
-          : "Deposit complete.",
-      );
-    };
-
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key === WALLETS_DB_STORAGE_KEY || event.key === null) {
-        handleWalletUpdate(event);
-      }
-    };
-
-    window.addEventListener(WALLET_SYNC_EVENT, handleWalletUpdate);
-    window.addEventListener("storage", handleStorage);
-    window.addEventListener(WALLET_DEPOSIT_EVENT, handleDeposit);
-    return () => {
-      window.removeEventListener(WALLET_SYNC_EVENT, handleWalletUpdate);
-      window.removeEventListener("storage", handleStorage);
-      window.removeEventListener(WALLET_DEPOSIT_EVENT, handleDeposit);
-    };
-  }, [walletLedger, showNotification]);
-
   const selectedVault = vaults.find((vault) => vault.id === selectedVaultId) ?? vaults[0];
-  const publisherKey = (providerAddress.trim() || "you.near").toLowerCase();
-  const myVaults = vaults.filter((vault) => vault.seller.trim().toLowerCase() === publisherKey);
+  const myVaults = vaults.filter((vault) => vault.source === "session");
   const parsedPrice = Number(draftPrice);
+  const providerAddressValid = isValidNearAccountId(providerAddress);
   const canPublish = draftFiles.length > 0
     && draftTitle.trim().length > 0
     && Number.isFinite(parsedPrice)
-    && parsedPrice > 0;
-
-  function publisherEarnings(address: string): number {
-    const account = accountsLedger[normalizeAccountAddress(address)];
-    if (!account) return 0;
-    return Math.max(0, roundNear(account.balanceNear - INITIAL_TEST_BALANCE_NEAR));
-  }
+    && parsedPrice > 0
+    && providerAddressValid;
 
   function handleSelectVault(vaultId: string) {
     if (vaultId === selectedVaultId) return;
-    if (timeoutRef.current !== null) {
-      window.clearTimeout(timeoutRef.current);
-      timeoutRef.current = null;
-    }
     runIdRef.current += 1;
     setSelectedVaultId(vaultId);
     setQuery("");
     setAnswer(null);
-    setIsExecuting(false);
+    setStage("idle");
+    setVerifiedPayment(null);
+    setRetryContext(null);
+    setErrorMessage(null);
   }
 
-  function handleRunQuery(event: FormEvent<HTMLFormElement>) {
+  function readError(result: unknown, fallback: string): string {
+    if (result && typeof result === "object" && "error" in result) {
+      const message = (result as { error?: unknown }).error;
+      if (typeof message === "string" && message.trim()) return message;
+    }
+    return fallback;
+  }
+
+  async function executeAnswer(execution: QueryExecution) {
+    const runId = runIdRef.current;
+    const { vault, payment } = execution;
+
+    setStage("inferring");
+    setErrorMessage(null);
+
+    const payload: Record<string, unknown> = {
+      query: execution.submittedQuery,
+      txHash: payment.txHash,
+      payerAccountId: execution.payerAccountId,
+      queryPrice: vault.priceNear,
+    };
+    // Sample vaults are resolved from the server-side catalog. The browser
+    // only sends the vault ID, never the sample rows. Session-published vaults
+    // send the dataset that this browser created.
+    if (vault.source === "sample") {
+      payload.vaultId = vault.id;
+    } else {
+      payload.dataset = vault.dataset ?? "";
+    }
+
+    const response = await fetch("/api/query-tee", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    let result: unknown;
+    try {
+      result = await response.json();
+    } catch {
+      throw new Error("The query service returned an invalid response.");
+    }
+
+    if (runId !== runIdRef.current) return;
+
+    if (!response.ok) {
+      throw new Error(readError(result, "The query could not be completed."));
+    }
+    if (
+      typeof result !== "object"
+      || result === null
+      || !("insight" in result)
+      || typeof result.insight !== "string"
+    ) {
+      throw new Error("The query service returned an incomplete answer.");
+    }
+
+    const record = result as Record<string, unknown>;
+    const acknowledgedReceiptId =
+      typeof record.receiptId === "string" ? record.receiptId : undefined;
+    if (acknowledgedReceiptId && acknowledgedReceiptId !== payment.txHash) {
+      throw new Error("The answer was not linked to the verified payment transaction.");
+    }
+
+    const inference = typeof record.inference === "object" && record.inference !== null
+      ? record.inference as Record<string, unknown>
+      : {};
+    const attestation = typeof record.attestation === "object" && record.attestation !== null
+      ? record.attestation as Record<string, unknown>
+      : {};
+
+    const answerValue: VaultAnswer = {
+      vaultTitle: vault.title,
+      priceNear: vault.priceNear,
+      insight: record.insight as string,
+      attestationToken: typeof attestation.token === "string"
+        ? attestation.token
+        : `simulated-tee-${payment.txHash.slice(0, 24)}`,
+      attestationSimulated: attestation.simulated !== false,
+      onChainTransactionHash: payment.txHash,
+      amountNear: payment.amountNear || vault.priceNear,
+      receiverId: payment.receiverId || treasuryAccount,
+      blockHeight: payment.blockHeight,
+      model: typeof inference.model === "string" ? inference.model : "NEAR AI Cloud",
+      inferenceProvider: typeof inference.provider === "string"
+        ? inference.provider
+        : "NEAR AI Cloud",
+    };
+
+    if (runId !== runIdRef.current) return;
+
+    setAnswer(answerValue);
+    setStage("ready");
+    setRetryContext(null);
+    onAuditLog(`Answer delivered for "${vault.title}"`, payment.txHash);
+    setNotification(
+      `Payment confirmed on NEAR testnet · ${payment.txHash.slice(0, 14)}…`,
+    );
+  }
+
+  async function handleRunQuery(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const submittedQuery = query.trim();
     if (!submittedQuery || isExecuting) return;
 
     const vault = selectedVault;
-    const priceNear = Number(vault.priceNear);
-    const settlement = onSettleQuery(priceNear, vault.title, vault.seller);
-    if (!settlement.success) {
-      showNotification(settlement.message ?? "The query could not be settled. Check your wallet balance.");
+    const wallet = walletContext?.wallet;
+
+    if (!walletAccountId || !walletContext || !wallet) {
+      setNotification("Connect a NEAR testnet wallet to sign the on-chain query payment.");
+      try {
+        await walletContext?.signIn();
+      } catch (error) {
+        setNotification(
+          error instanceof Error ? error.message : "Could not open the wallet modal.",
+        );
+      }
       return;
     }
 
     const runId = runIdRef.current + 1;
     runIdRef.current = runId;
-    setIsExecuting(true);
-    setAnswer(null);
 
-    if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
-    timeoutRef.current = window.setTimeout(() => {
+    setStage("signing");
+    setAnswer(null);
+    setVerifiedPayment(null);
+    setRetryContext(null);
+    setErrorMessage(null);
+
+    try {
+      // The user approves a real native NEAR transfer to the BlindSight
+      // testnet treasury. The wallet popup is opened immediately so browsers
+      // treat it as part of the click.
+      const transferResult = await transferNear(walletContext, treasuryAccount, vault.priceNear);
+      const onChainTransactionHash = extractTransactionHash(transferResult);
+      if (!onChainTransactionHash) {
+        throw new Error(
+          "The wallet did not return a NEAR testnet transaction hash. No query was sent.",
+        );
+      }
+
       if (runId !== runIdRef.current) return;
-      setAnswer({
-        vaultTitle: vault.title,
-        priceNear: vault.priceNear,
-        insight: buildVaultInsight(vault, submittedQuery),
-        attestationToken: createAttestationToken(),
+      setStage("verifying");
+      onAuditLog(
+        `NEAR testnet payment submitted · ${vault.priceNear} NEAR to ${treasuryAccount}`,
+        onChainTransactionHash,
+      );
+
+      const verificationResponse = await fetch("/api/verify-payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          txHash: onChainTransactionHash,
+          payerAccountId: walletAccountId,
+          vaultId: vault.source === "sample" ? vault.id : undefined,
+          queryPrice: vault.source === "session" ? vault.priceNear : undefined,
+        }),
       });
-      setIsExecuting(false);
-      timeoutRef.current = null;
-    }, 480);
+
+      let verification: unknown;
+      try {
+        verification = await verificationResponse.json();
+      } catch {
+        throw new Error("The payment verification service returned an invalid response.");
+      }
+
+      if (runId !== runIdRef.current) return;
+
+      const verificationRecord = typeof verification === "object" && verification !== null
+        ? verification as Record<string, unknown>
+        : {};
+      if (!verificationResponse.ok || verificationRecord.verified !== true) {
+        throw new Error(
+          readError(verification, "The NEAR testnet payment could not be verified."),
+        );
+      }
+
+      const payment = toVerifiedPayment(
+        verificationRecord.payment,
+        onChainTransactionHash,
+        walletAccountId,
+      );
+      setVerifiedPayment(payment);
+      setStage("confirmed");
+
+      const execution: QueryExecution = {
+        vault,
+        submittedQuery,
+        payerAccountId: walletAccountId,
+        payment,
+      };
+      setRetryContext(execution);
+      await executeAnswer(execution);
+    } catch (error) {
+      if (runId === runIdRef.current) {
+        const message = error instanceof Error ? error.message : "The query could not be completed.";
+        setErrorMessage(message);
+        setStage("error");
+        setNotification(message);
+      }
+    }
+  }
+
+  async function handleRetryAnswer() {
+    if (!retryContext || isExecuting) return;
+    const runId = runIdRef.current + 1;
+    runIdRef.current = runId;
+    try {
+      await executeAnswer(retryContext);
+    } catch (error) {
+      if (runId === runIdRef.current) {
+        const message = error instanceof Error ? error.message : "The query could not be completed.";
+        setErrorMessage(message);
+        setStage("error");
+        setNotification(message);
+      }
+    }
   }
 
   function handleUnpublish(vaultId: string) {
@@ -569,30 +473,18 @@ export default function QueryVault({
 
     const remaining = vaults.filter((entry) => entry.id !== vaultId);
     setVaults(remaining);
-    setAuditLog((current) => [
-      {
-        id: window.crypto.randomUUID(),
-        message: `${vault.title} withdrawn from enclave marketplace`,
-        timestamp: new Date().toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-        }),
-      },
-      ...current,
-    ]);
-    showNotification(`"${vault.title}" was removed. Buyers can no longer query it.`);
+    onAuditLog(`${vault.title} withdrawn from the marketplace`);
+    setNotification(`"${vault.title}" was removed. Buyers can no longer query it.`);
 
     if (selectedVaultId === vaultId) {
-      if (timeoutRef.current !== null) {
-        window.clearTimeout(timeoutRef.current);
-        timeoutRef.current = null;
-      }
       runIdRef.current += 1;
       setSelectedVaultId(remaining[0]?.id ?? "");
       setQuery("");
       setAnswer(null);
-      setIsExecuting(false);
+      setStage("idle");
+      setVerifiedPayment(null);
+      setRetryContext(null);
+      setErrorMessage(null);
     }
   }
 
@@ -602,23 +494,22 @@ export default function QueryVault({
 
     for (const file of Array.from(selectedFiles)) {
       const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
-      if (!["pdf", "csv", "txt"].includes(extension)) {
+      // Only text formats are accepted: the server analyzes the real file
+      // contents, so files without extractable text are rejected.
+      if (!["csv", "txt", "md", "markdown"].includes(extension)) {
         rejected.push(file.name);
         continue;
       }
 
       let content = "";
-      if (extension === "pdf") {
-        content = `PDF document "${file.name}" (${formatBytes(file.size)}). Local text extraction is simulated in this demo.`;
-      } else {
-        try {
-          content = await file.text();
-        } catch {
-          content = "";
-        }
-        if (!content.trim()) {
-          content = `Document "${file.name}" (${formatBytes(file.size)}).`;
-        }
+      try {
+        content = await file.text();
+      } catch {
+        content = "";
+      }
+      if (!content.trim()) {
+        rejected.push(file.name);
+        continue;
       }
 
       accepted.push({
@@ -631,14 +522,14 @@ export default function QueryVault({
 
     if (accepted.length) {
       setDraftFiles((current) => [...current, ...accepted]);
-      showNotification(`${accepted.length} file${accepted.length === 1 ? "" : "s"} ready to publish.`);
+      setNotification(`${accepted.length} file${accepted.length === 1 ? "" : "s"} ready to publish.`);
       setDraftNotice("");
     } else {
       setDraftNotice("");
     }
 
     if (rejected.length) {
-      setDraftNotice(`Skipped ${rejected.join(", ")}. Only .pdf, .csv, and .txt files are supported.`);
+      setDraftNotice(`Skipped ${rejected.join(", ")}. Only non-empty .csv, .txt, and .md files are supported.`);
     }
   }
 
@@ -657,14 +548,28 @@ export default function QueryVault({
     setDraftFiles((current) => current.filter((file) => file.id !== fileId));
   }
 
-  function handlePublish(event: FormEvent<HTMLFormElement>) {
+  async function handlePublish(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!canPublish) return;
 
-    if (timeoutRef.current !== null) {
-      window.clearTimeout(timeoutRef.current);
-      timeoutRef.current = null;
+    if (!walletAccountId) {
+      setNotification("Connect a NEAR wallet to publish a session vault.");
+      try {
+        await walletContext?.signIn();
+      } catch (error) {
+        setNotification(
+          error instanceof Error ? error.message : "Could not open the wallet modal.",
+        );
+      }
+      return;
     }
+
+    const seller = providerAddress.trim();
+    if (!isValidNearAccountId(seller)) {
+      setNotification("Enter a valid NEAR testnet account as the payout address.");
+      return;
+    }
+
     runIdRef.current += 1;
 
     const title = draftTitle.trim();
@@ -674,21 +579,25 @@ export default function QueryVault({
       title,
       description: draftDescription.trim() || "Published from the Vault Publisher tab.",
       category: "Custom",
-      seller: providerAddress.trim() || "you.near",
+      seller,
       priceNear: normalizePrice(draftPrice),
       rows: estimateRows(dataset),
-      updated: "just now",
+      updated: "published this session",
       dataset,
-      earningsNear: 0,
+      source: "session",
     };
 
     setVaults((current) => [newVault, ...current]);
     setSelectedVaultId(newVault.id);
     setQuery("");
     setAnswer(null);
-    setIsExecuting(false);
-    setActiveTab("explorer");
-    showNotification(`"${title}" is live in the local TEE marketplace.`);
+    setStage("idle");
+    setVerifiedPayment(null);
+    setRetryContext(null);
+    setErrorMessage(null);
+    onTabChange("gateway");
+    onAuditLog(`${title} published to the marketplace`);
+    setNotification(`"${title}" is live in this browser session.`);
     setDraftFiles([]);
     setDraftTitle("");
     setDraftDescription("");
@@ -698,487 +607,669 @@ export default function QueryVault({
 
   return (
     <>
-    <section className="flex min-w-0 flex-col overflow-hidden border border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl transition-colors hover:border-emerald-500/40">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-emerald-500/20 px-4 py-4 sm:px-5">
-        <div className="flex items-center gap-3">
-          <span className="size-2 rotate-45 border border-[#34D399]" />
-          <div>
-            <h2 className="text-[14px] font-medium text-[#F0FDF4]">Query Vault</h2>
-            <p className="mt-0.5 text-[10px] text-[#7D9187]">Private datasets, attested answers</p>
-          </div>
-        </div>
-        <span className="flex items-center gap-2 text-[10px] text-[#A7B9B0]">
-          <span className="size-1.5 rounded-full bg-[#34D399]" />
-          TEE marketplace · demo
-        </span>
-      </div>
-
-      <div className="border-b border-emerald-500/20 px-4 py-3 sm:px-5">
-        <div
-          role="tablist"
-          aria-label="Vault views"
-          className="flex w-full gap-1 border border-emerald-500/20 bg-[#0B0F17]/60 p-1 sm:w-fit"
+      {activeTab === "gateway" && (
+        <section
+          role="tabpanel"
+          id="gateway-panel"
+          aria-labelledby="gateway-tab"
+          className="animate-fade-up space-y-5 rounded-2xl border border-white/10 bg-slate-900/70 p-6 backdrop-blur-xl transition-all duration-300"
         >
-          <button
-            id="explorer-tab"
-            type="button"
-            role="tab"
-            aria-selected={activeTab === "explorer"}
-            aria-controls="explorer-panel"
-            onClick={() => setActiveTab("explorer")}
-            className={`flex-1 px-4 py-2 text-[11px] font-medium transition sm:flex-none ${
-              activeTab === "explorer"
-                ? "bg-emerald-500 text-slate-950 shadow-lg shadow-emerald-500/20"
-                : "text-[#A7B9B0] hover:bg-emerald-950/40 hover:text-[#F0FDF4]"
-            }`}
-          >
-            Data Explorer
-          </button>
-          <button
-            id="publisher-tab"
-            type="button"
-            role="tab"
-            aria-selected={activeTab === "publisher"}
-            aria-controls="publisher-panel"
-            onClick={() => setActiveTab("publisher")}
-            className={`flex-1 px-4 py-2 text-[11px] font-medium transition sm:flex-none ${
-              activeTab === "publisher"
-                ? "bg-emerald-500 text-slate-950 shadow-lg shadow-emerald-500/20"
-                : "text-[#A7B9B0] hover:bg-emerald-950/40 hover:text-[#F0FDF4]"
-            }`}
-          >
-            Vault Publisher
-          </button>
-        </div>
-      </div>
+          {selectedVault ? (
+            <>
+              <div className="animate-fade-up rounded-xl border border-white/10 bg-slate-950/40 p-4 shadow-[0_0_25px_rgba(56,189,248,0.08)]">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-full border border-cyan-400/25 bg-cyan-500/10 px-2 py-0.5 text-[9px] uppercase tracking-[0.14em] text-cyan-300">
+                        {selectedVault.category}
+                      </span>
+                      <span className="inline-flex items-center gap-1.5 text-[9px] uppercase tracking-[0.12em] text-cyan-300">
+                        <span className="size-1.5 rounded-full bg-cyan-400 animate-pulse-glow" />
+                        {selectedVault.source === "sample" ? "Sample vault" : "Session vault"}
+                      </span>
+                    </div>
+                    <h3 className="mt-2 bg-gradient-to-r from-white via-cyan-100 to-purple-200 bg-clip-text text-[15px] font-semibold text-transparent animate-shimmer">
+                      {selectedVault.title}
+                    </h3>
+                    <p className="mt-1 max-w-2xl text-[11px] leading-5 text-slate-400">
+                      {selectedVault.description}
+                    </p>
+                  </div>
+                  <span className="animate-float rounded-lg border border-purple-400/25 bg-purple-500/10 px-2.5 py-1.5 font-mono text-[12px] text-purple-200">
+                    {selectedVault.priceNear} <span className="text-[10px] text-purple-300/70">NEAR</span>
+                  </span>
+                </div>
 
-      <div className="flex-1 p-4 sm:p-5">
-        {activeTab === "explorer" ? (
-          <div
-            role="tabpanel"
-            id="explorer-panel"
-            aria-labelledby="explorer-tab"
-            className="space-y-4"
-          >
-            <div className="flex flex-wrap items-end justify-between gap-3">
-              <div>
-                <h3 className="text-[12px] font-medium text-[#E2F8EC]">Active Enclave Vaults</h3>
-                <p className="mt-1 text-[11px] leading-5 text-[#A7B9B0]">
-                  Select a vault to query it instantly. No file upload required.
-                </p>
+                <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-white/10 pt-3 text-[10px] text-slate-400">
+                  <span>
+                    Publisher{" "}
+                    <span className="font-mono text-slate-200">
+                      {selectedVault.source === "sample" ? "BlindSight sample catalog" : selectedVault.seller}
+                    </span>
+                    <span className="ml-1 rounded border border-amber-400/25 bg-amber-500/10 px-1 py-0.5 text-[8px] uppercase tracking-[0.1em] text-amber-300">
+                      {selectedVault.source === "sample" ? "sample" : "this session"}
+                    </span>
+                  </span>
+                  <span>
+                    Rows <span className="text-slate-200">{formatNumber(selectedVault.rows)}</span>
+                  </span>
+                  <span>
+                    Snapshot <span className="text-slate-200">{selectedVault.updated}</span>
+                  </span>
+                  <span>
+                    Wallet{" "}
+                    <span className="font-mono text-slate-200">
+                      {nearAccountId
+                        ? `${walletBalanceNear ?? "—"} NEAR`
+                        : "not connected"}
+                    </span>
+                  </span>
+                  <span className="w-full sm:w-auto">
+                    Fee recipient{" "}
+                    <a
+                      href={getTreasuryExplorerUrl(treasuryAccount)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-mono text-cyan-200 underline underline-offset-2 hover:text-white"
+                    >
+                      {treasuryAccount} ↗
+                    </a>
+                  </span>
+                  <label className="ml-auto flex items-center gap-2">
+                    <span className="text-[9px] uppercase tracking-[0.14em] text-slate-500">Switch vault</span>
+                    <select
+                      value={selectedVault.id}
+                      onChange={(event) => handleSelectVault(event.target.value)}
+                      className="max-w-[220px] rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-[10px] text-slate-200 outline-none transition focus:border-cyan-400/60"
+                    >
+                      {vaults.map((vault) => (
+                        <option key={vault.id} value={vault.id}>
+                          {vault.title}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                {walletBalanceError && nearAccountId && (
+                  <p className="mt-2 text-[9px] leading-4 text-rose-300">
+                    Balance RPC error: {walletBalanceError}
+                  </p>
+                )}
               </div>
-              <span className="border border-emerald-500/20 bg-emerald-950/30 px-2 py-1 text-[10px] text-[#34D399]">
-                {vaults.length} vaults online
+
+              <div className="animate-fade-up overflow-hidden rounded-xl border border-white/10 bg-slate-950/40" style={{ animationDelay: "80ms" }}>
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
+                  <div className="min-w-0">
+                    <h3 className="bg-gradient-to-r from-white via-cyan-100 to-purple-200 bg-clip-text text-[11px] font-semibold text-transparent animate-shimmer">Paid query console</h3>
+                    <div className="mt-0.5 truncate text-[10px] text-slate-400">
+                      Real NEAR testnet payment · server-side NEAR AI inference · TEE attestation simulated
+                    </div>
+                  </div>
+                  <span className="rounded-full border border-cyan-400/30 bg-cyan-500/10 px-2 py-0.5 text-[9px] uppercase tracking-[0.1em] text-cyan-200">
+                    Native NEAR · real
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 border-b border-white/10 bg-white/[0.02] px-4 py-2 text-[9px] uppercase tracking-[0.1em]">
+                  <span className="rounded-full border border-cyan-400/30 bg-cyan-500/10 px-2 py-0.5 text-cyan-200">Real · wallet signature</span>
+                  <span className="rounded-full border border-cyan-400/30 bg-cyan-500/10 px-2 py-0.5 text-cyan-200">Real · NEAR testnet transfer</span>
+                  <span className="rounded-full border border-cyan-400/30 bg-cyan-500/10 px-2 py-0.5 text-cyan-200">Real · NEAR AI inference</span>
+                  <span className="rounded-full border border-amber-400/30 bg-amber-500/10 px-2 py-0.5 text-amber-200">Simulated · TEE attestation</span>
+                  <span className="rounded-full border border-amber-400/30 bg-amber-500/10 px-2 py-0.5 text-amber-200">Not executed · publisher payout</span>
+                </div>
+
+                <form onSubmit={handleRunQuery} className="grid gap-3 p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <label htmlFor="vault-query" className="text-[11px] font-medium text-white">
+                      Ask the private dataset
+                    </label>
+                    <span className="text-[10px] text-slate-500">{query.length} / 500</span>
+                  </div>
+                  <div className="rounded-xl border border-white/10 bg-slate-950/70 transition-all duration-300 focus-within:border-cyan-400/60 focus-within:shadow-[0_0_20px_rgba(56,189,248,0.15)]">
+                    <textarea
+                      id="vault-query"
+                      value={query}
+                      onChange={(event) => setQuery(event.target.value)}
+                      rows={3}
+                      maxLength={500}
+                      placeholder="What are the biggest risks in this dataset?"
+                      className="min-h-[88px] w-full resize-y bg-transparent px-3 pt-3 text-[13px] leading-6 text-slate-100 outline-none placeholder:text-slate-500"
+                    />
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 px-3 py-2.5">
+                      <span className="text-[10px] text-slate-500">
+                        Real native NEAR transfer to the treasury, approved in your wallet
+                      </span>
+                      <button
+                        type="submit"
+                        disabled={!query.trim() || isExecuting}
+                        className="flex h-9 items-center gap-2 rounded-lg bg-gradient-to-r from-cyan-500 to-purple-500 px-3 text-[11px] font-semibold text-slate-950 shadow-[0_0_25px_rgba(34,211,238,0.25)] transition-all duration-300 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
+                      >
+                        {stage === "signing"
+                          ? "Confirm in wallet..."
+                          : stage === "verifying"
+                            ? "Verifying payment..."
+                            : stage === "confirmed"
+                              ? "Payment confirmed..."
+                              : stage === "inferring"
+                                ? "Generating answer..."
+                                : `Pay ${selectedVault.priceNear} NEAR & ask`}
+                        <span aria-hidden="true">{isExecuting ? "···" : "→"}</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {QUERY_SUGGESTIONS.map((suggestion) => (
+                      <button
+                        key={suggestion}
+                        type="button"
+                        onClick={() => setQuery(suggestion)}
+                        className="rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-[10px] text-slate-400 transition-all duration-300 hover:border-cyan-400/40 hover:bg-cyan-500/10 hover:text-cyan-100"
+                      >
+                        {suggestion}
+                      </button>
+                    ))}
+                  </div>
+                </form>
+
+                {(stage === "signing" || stage === "verifying" || stage === "confirmed" || stage === "inferring" || stage === "ready" || stage === "error") && (
+                  <div role="status" className="border-t border-white/10 bg-cyan-500/[0.04] px-4 py-4">
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <PaymentStep
+                        index={1}
+                        label="Sign NEAR payment"
+                        detail="Approve the transfer in your wallet"
+                        state={
+                          stage === "signing"
+                            ? "active"
+                            : stage === "error" && !verifiedPayment
+                              ? "error"
+                              : "done"
+                        }
+                      />
+                      <PaymentStep
+                        index={2}
+                        label="Verify on-chain"
+                        detail="Server checks the finalized transfer"
+                        state={
+                          verifiedPayment
+                            ? "done"
+                            : stage === "verifying"
+                              ? "active"
+                              : stage === "error"
+                                ? "error"
+                                : "pending"
+                        }
+                      />
+                      <PaymentStep
+                        index={3}
+                        label="Generate answer"
+                        detail="NEAR AI runs after payment clears"
+                        state={
+                          stage === "ready"
+                            ? "done"
+                            : stage === "inferring"
+                              ? "active"
+                              : stage === "error" && verifiedPayment
+                                ? "error"
+                                : "pending"
+                        }
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {verifiedPayment && (
+                  <div aria-live="polite" className="border-t border-emerald-400/20 bg-emerald-500/[0.05] px-4 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 text-[11px] font-semibold text-emerald-200">
+                        <span aria-hidden="true">✓</span>
+                        Payment confirmed on NEAR testnet
+                      </div>
+                      <a
+                        href={verifiedPayment.explorerUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[10px] text-emerald-200 underline underline-offset-2 hover:text-white"
+                      >
+                        View transaction ↗
+                      </a>
+                    </div>
+                    <div className="mt-1 grid gap-1 text-[10px] text-slate-400 sm:grid-cols-3">
+                      <span>
+                        Amount{" "}
+                        <span className="font-mono text-slate-200">{verifiedPayment.amountNear || selectedVault.priceNear} NEAR</span>
+                      </span>
+                      <span>
+                        To{" "}
+                        <span className="break-all font-mono text-slate-200">{verifiedPayment.receiverId || treasuryAccount}</span>
+                      </span>
+                      <span>
+                        Block{" "}
+                        <span className="font-mono text-slate-200">{verifiedPayment.blockHeight ?? "finalized"}</span>
+                      </span>
+                    </div>
+                    <div className="mt-1 break-all font-mono text-[9px] text-slate-500">
+                      {verifiedPayment.txHash}
+                    </div>
+                  </div>
+                )}
+
+                {errorMessage && (
+                  <div role="alert" className="border-t border-rose-400/20 bg-rose-500/[0.06] px-4 py-3">
+                    <p className="text-[11px] font-semibold text-rose-200">Query failed</p>
+                    <p className="mt-1 text-[10px] leading-5 text-rose-100/80">{errorMessage}</p>
+                    {retryContext && (
+                      <button
+                        type="button"
+                        onClick={() => void handleRetryAnswer()}
+                        disabled={isExecuting}
+                        className="mt-2 rounded-lg border border-rose-300/40 bg-rose-500/10 px-3 py-1.5 text-[10px] font-semibold text-rose-100 transition hover:bg-rose-500/20 disabled:opacity-50"
+                      >
+                        Retry the answer with this confirmed payment
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {answer && (
+                  <div aria-live="polite" className="border-t border-white/10 px-4 py-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 text-[11px] font-semibold text-cyan-200">
+                        <span aria-hidden="true">⌑</span>
+                        Answer ready
+                      </div>
+                      <span className="rounded-full border border-emerald-400/25 bg-emerald-500/10 px-2 py-1 text-[9px] uppercase tracking-[0.14em] text-emerald-200">
+                        Paid · verified on-chain
+                      </span>
+                    </div>
+                    <div className="mt-1 text-[10px] text-slate-500">
+                      {answer.vaultTitle} · {answer.priceNear} NEAR per query · {answer.inferenceProvider} · native NEAR payment
+                    </div>
+                    <p className="mt-3 whitespace-pre-line break-words text-[12px] leading-6 text-slate-100">
+                      {answer.insight}
+                    </p>
+                    <div className="mt-4 grid gap-2 text-[10px] sm:grid-cols-3">
+                      <div className="rounded-lg border border-emerald-400/20 bg-emerald-500/[0.04] px-3 py-2">
+                        <span className="block text-slate-400">Verified payment</span>
+                        <span className="mt-1 block font-mono text-emerald-200">
+                          {answer.amountNear} NEAR · block {answer.blockHeight ?? "final"}
+                        </span>
+                      </div>
+                      <div className="rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2">
+                        <span className="block text-slate-400">Inference model</span>
+                        <span className="mt-1 block break-all font-mono text-slate-100">{answer.model}</span>
+                      </div>
+                      <div className="rounded-lg border border-amber-400/20 bg-amber-500/[0.04] px-3 py-2">
+                        <span className="block text-slate-400">Enclave attestation</span>
+                        <span className="mt-1 block font-mono text-amber-200">
+                          {answer.attestationSimulated ? "Simulated" : "Reported by server"}
+                        </span>
+                        <span className="mt-1 block text-[9px] leading-4 text-slate-500">
+                          Dataset discarded after inference
+                        </span>
+                      </div>
+                      <div className="rounded-lg border border-cyan-400/20 bg-cyan-500/[0.04] px-3 py-2 sm:col-span-3">
+                        <span className="block text-slate-400">NEAR testnet payment transaction</span>
+                        <a
+                          href={getTransactionExplorerUrl(answer.onChainTransactionHash)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="mt-1 block break-all font-mono text-[10px] text-cyan-200 underline underline-offset-2 hover:text-white"
+                        >
+                          {answer.onChainTransactionHash} ↗
+                        </a>
+                      </div>
+                      <div className="rounded-lg border border-amber-400/20 bg-amber-500/[0.04] px-3 py-2 sm:col-span-3">
+                        <span className="block text-slate-400">Simulated attestation token</span>
+                        <code className="mt-1 block break-all font-mono text-[10px] text-amber-200">
+                          {answer.attestationToken}
+                        </code>
+                        <span className="mt-1 block text-[9px] text-slate-500">
+                          Derived from the payment hash and answer. This is not hardware attestation.
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {!isExecuting && !answer && !errorMessage && (
+                  <div className="border-t border-white/10 px-4 py-4 text-[11px] leading-5 text-slate-500">
+                    Answers appear here only after a real NEAR testnet transfer is signed and verified.
+                    The sample datasets never leave the server.
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="rounded-xl border border-white/10 bg-slate-950/40 px-4 py-10 text-center">
+              <p className="text-[12px] text-slate-300">No vaults are live right now.</p>
+              <p className="mt-1 text-[11px] text-slate-500">Publish a dataset to create the first vault.</p>
+            </div>
+          )}
+        </section>
+      )}
+
+      {activeTab === "publish" && (
+        <section
+          role="tabpanel"
+          id="publish-panel"
+          aria-labelledby="publish-tab"
+          className="animate-fade-up space-y-5 rounded-2xl border border-white/10 bg-slate-900/70 p-6 backdrop-blur-xl transition-all duration-300"
+        >
+          <div>
+            <h3 className="bg-gradient-to-r from-white via-cyan-100 to-purple-200 bg-clip-text text-[12px] font-semibold text-transparent animate-shimmer">Publish a vault</h3>
+            <p className="mt-1 text-[11px] leading-5 text-slate-400">
+              Package text data, set a NEAR price, and list it in this browser session. The dataset is
+              sent to the server-side inference endpoint only when a paid query runs. Publishing
+              itself does not submit an on-chain transaction.
+            </p>
+          </div>
+
+          {draftNotice && (
+            <div role="status" className="rounded-lg border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">
+              {draftNotice}
+            </div>
+          )}
+
+          <div className="animate-fade-up overflow-hidden rounded-xl border border-white/10 bg-slate-950/40" style={{ animationDelay: "60ms" }}>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-3 py-2.5">
+              <h4 className="text-[10px] uppercase tracking-[0.14em] text-slate-400">
+                My published vaults
+              </h4>
+              <span className="rounded-md border border-cyan-400/25 bg-cyan-500/10 px-1.5 py-0.5 font-mono text-[9px] text-cyan-200">
+                {myVaults.length}
               </span>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-2">
-              {vaults.map((vault) => {
-                const isSelected = vault.id === selectedVault.id;
-                return (
-                  <button
-                    key={vault.id}
-                    type="button"
-                    onClick={() => handleSelectVault(vault.id)}
-                    aria-pressed={isSelected}
-                    className={`group relative flex h-full flex-col border p-4 text-left transition ${
-                      isSelected
-                        ? "border-[#10B981]/70 bg-emerald-950/50 shadow-[0_0_0_1px_rgba(16,185,129,0.25)]"
-                        : "border-emerald-500/20 bg-[#0B0F17]/60 hover:border-emerald-500/40 hover:bg-emerald-950/30"
-                    }`}
-                  >
-                    <span className="flex items-start justify-between gap-3">
-                      <span className="border border-emerald-500/20 bg-[#0B0F17]/60 px-2 py-1 text-[9px] uppercase tracking-[0.14em] text-[#34D399]">
-                        {vault.category}
-                      </span>
-                      {isSelected ? (
-                        <span className="flex items-center gap-1.5 text-[9px] uppercase tracking-[0.12em] text-[#34D399]">
-                          <span className="size-1.5 rounded-full bg-[#34D399]" />
-                          Selected
-                        </span>
-                      ) : (
-                        <span className="text-[12px] text-[#7D9187] transition group-hover:text-[#34D399]" aria-hidden="true">
-                          →
-                        </span>
-                      )}
-                    </span>
-
-                    <span className="mt-3 block text-[13px] font-medium text-[#F0FDF4]">
-                      {vault.title}
-                    </span>
-                    <span className="mt-2 line-clamp-2 block text-[11px] leading-5 text-[#A7B9B0]">
-                      {vault.description}
-                    </span>
-
-                    <span className="mt-auto flex items-end justify-between gap-3 pt-4">
-                      <span>
-                        <span className="block text-[9px] uppercase tracking-[0.14em] text-[#7D9187]">Price</span>
-                        <span className="mt-1 block font-mono text-[13px] text-[#F0FDF4]">
-                          {vault.priceNear} <span className="text-[10px] font-normal text-[#A7B9B0]">NEAR</span>
-                        </span>
-                      </span>
-                      <span className="text-right text-[10px] text-[#7D9187]">
-                        <span className="block text-[#34D399]">Earned {formatNearAmount(publisherEarnings(vault.seller))}</span>
-                        <span className="mt-0.5 block">{formatNumber(vault.rows)} rows · {vault.updated}</span>
-                      </span>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="border border-emerald-500/20 bg-[#0B0F17]/80 backdrop-blur-xl">
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-emerald-500/20 px-4 py-3">
-                <div className="min-w-0">
-                  <h3 className="text-[11px] font-medium text-[#E2F8EC]">Attested Query Console</h3>
-                  <div className="mt-1 truncate text-[10px] text-[#A7B9B0]">Selected vault · {selectedVault.title}</div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="border border-emerald-500/20 bg-[#0B0F17]/60 px-2 py-1 font-mono text-[10px] text-[#34D399]">
-                    {selectedVault.priceNear} NEAR / query
-                  </span>
-                  <span className="hidden border border-emerald-500/20 px-2 py-1 font-mono text-[9px] text-[#A7B9B0] sm:inline">
-                    Publisher earned {formatNearAmount(publisherEarnings(selectedVault.seller))}
-                  </span>
-                  <span className="hidden border border-emerald-500/20 px-2 py-1 text-[9px] uppercase tracking-[0.14em] text-[#A7B9B0] sm:inline">
-                    No upload
-                  </span>
-                </div>
-              </div>
-
-              <form onSubmit={handleRunQuery} className="p-4">
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <label htmlFor="vault-query" className="text-[11px] font-medium text-[#E2F8EC]">
-                    Ask the private dataset
-                  </label>
-                  <span className="text-[10px] text-[#7D9187]">{query.length} / 500</span>
-                </div>
-                <div className="border border-emerald-500/20 bg-[#0B0F17]/80 transition-colors focus-within:border-[#10B981]/70">
-                  <textarea
-                    id="vault-query"
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                    rows={3}
-                    maxLength={500}
-                    placeholder="What is the projected revenue for 2026?"
-                    className="min-h-[88px] w-full resize-y bg-transparent px-3 pt-3 text-[13px] leading-6 text-[#F0FDF4] outline-none placeholder:text-[#7D9187]"
-                  />
-                  <div className="flex flex-wrap items-center justify-between gap-3 border-t border-emerald-500/20 px-3 py-2.5">
-                    <span className="text-[10px] text-[#7D9187]">Simulated TEE execution · local demo</span>
-                    <button
-                      type="submit"
-                      disabled={!query.trim() || isExecuting}
-                      className="flex h-9 items-center gap-2 bg-emerald-500 px-3 text-[11px] font-semibold text-slate-950 shadow-lg shadow-emerald-500/20 transition-all hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {isExecuting ? "Processing..." : `Run query · ${selectedVault.priceNear} NEAR`}
-                      <span aria-hidden="true">{isExecuting ? "···" : "→"}</span>
-                    </button>
-                  </div>
-                </div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {QUERY_SUGGESTIONS.map((suggestion) => (
-                    <button
-                      key={suggestion}
-                      type="button"
-                      onClick={() => setQuery(suggestion)}
-                      className="border border-emerald-500/20 bg-[#0B0F17]/60 px-2.5 py-1.5 text-[10px] text-[#A7B9B0] transition hover:border-emerald-500/40 hover:text-[#F0FDF4]"
-                    >
-                      {suggestion}
-                    </button>
-                  ))}
-                </div>
-              </form>
-
-              {isExecuting && (
-                <div role="status" className="border-t border-emerald-500/20 bg-emerald-950/20 px-4 py-4">
-                  <div className="flex items-center gap-3 text-[12px] text-[#34D399]">
-                    <span className="size-2 animate-pulse rounded-full bg-emerald-500" />
-                    Routing the query through the simulated TEE enclave...
-                  </div>
-                  <div className="mt-3 h-1 w-full overflow-hidden bg-emerald-500/10">
-                    <div className="h-full w-1/2 animate-pulse bg-emerald-500/60" />
-                  </div>
-                </div>
-              )}
-
-              {!isExecuting && answer && (
-                <div aria-live="polite" className="border-t border-emerald-500/20 px-4 py-4">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 text-[11px] font-medium text-[#34D399]">
-                      <span aria-hidden="true">⌑</span>
-                      Simulated TEE response
-                    </div>
-                    <span className="border border-emerald-500/20 px-2 py-1 text-[9px] uppercase tracking-[0.14em] text-[#D1FAE5]">
-                      Simulated attestation
-                    </span>
-                  </div>
-                  <div className="mt-1 text-[10px] text-[#7D9187]">
-                    {answer.vaultTitle} · {answer.priceNear} NEAR per query
-                  </div>
-                  <p className="mt-3 whitespace-pre-line break-words text-[12px] leading-6 text-[#E2F8EC]">
-                    {answer.insight}
-                  </p>
-                  <div className="mt-4 grid gap-2 text-[10px] sm:grid-cols-3">
-                    <div className="border border-emerald-500/20 bg-[#0B0F17]/60 px-3 py-2">
-                      <span className="block text-[#A7B9B0]">Attestation token</span>
-                      <code className="mt-1 block break-all font-mono text-[10px] text-[#34D399]">
-                        {answer.attestationToken}
-                      </code>
-                    </div>
-                    <div className="border border-emerald-500/20 bg-[#0B0F17]/60 px-3 py-2">
-                      <span className="block text-[#A7B9B0]">Anti-probing</span>
-                      <span className="mt-1 block font-mono text-[#F0FDF4]">PASSED</span>
-                    </div>
-                    <div className="border border-emerald-500/20 bg-[#0B0F17]/60 px-3 py-2">
-                      <span className="block text-[#A7B9B0]">Query price</span>
-                      <span className="mt-1 block font-mono text-[#F0FDF4]">{answer.priceNear} NEAR · settled locally</span>
-                    </div>
-                  </div>
-                  <p className="mt-3 text-[10px] leading-4 text-[#7D9187]">
-                    Local demo only. Balance settlement is simulated in this browser; no network call or real hardware attestation occurred.
-                  </p>
-                </div>
-              )}
-
-              {!isExecuting && !answer && (
-                <div className="border-t border-emerald-500/20 px-4 py-4 text-[11px] leading-5 text-[#7D9187]">
-                  Answers appear here after a query. Each run is simulated locally against the selected vault sample.
-                </div>
-              )}
-            </div>
-          </div>
-        ) : (
-          <div
-            role="tabpanel"
-            id="publisher-panel"
-            aria-labelledby="publisher-tab"
-            className="space-y-4"
-          >
-            <div>
-              <h3 className="text-[12px] font-medium text-[#E2F8EC]">Publish a vault</h3>
-              <p className="mt-1 text-[11px] leading-5 text-[#A7B9B0]">
-                Package a dataset, set a NEAR price, and publish it to the marketplace. Files never leave this browser.
+            {myVaults.length === 0 ? (
+              <p className="px-3 py-4 text-[11px] leading-5 text-slate-500">
+                You have no live vaults. Publish below to list a dataset for this browser session.
               </p>
+            ) : (
+              <ul className="divide-y divide-white/[0.06]">
+                {myVaults.map((vault) => (
+                  <li key={vault.id} className="flex flex-col gap-3 px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
+                      <div className="truncate text-[12px] font-medium text-white">{vault.title}</div>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-slate-500">
+                        <span className="font-mono text-cyan-200">{vault.priceNear} NEAR / query</span>
+                        <span>{vault.rows.toLocaleString("en-US")} rows</span>
+                        <span className="font-mono">{vault.seller}</span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleUnpublish(vault.id)}
+                      className="w-full shrink-0 rounded-lg border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-rose-200 transition-all duration-300 hover:border-rose-300/60 hover:bg-rose-500/20 sm:w-auto"
+                      aria-label={`Unpublish vault ${vault.title}`}
+                    >
+                      Unpublish / Remove Vault
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <form onSubmit={handlePublish} className="grid animate-fade-up gap-4" style={{ animationDelay: "120ms" }}>
+            <div>
+              <span className="mb-2 block text-[11px] text-slate-400">Dataset files</span>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept=".csv,.txt,.md,.markdown"
+                className="sr-only"
+                onChange={handleDraftFileChange}
+                aria-label="Select a CSV or text dataset (.txt, .md)"
+              />
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => fileInputRef.current?.click()}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    fileInputRef.current?.click();
+                  }
+                }}
+                onDragEnter={(event) => { event.preventDefault(); setIsDragging(true); }}
+                onDragOver={(event) => event.preventDefault()}
+                onDragLeave={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsDragging(false);
+                }}
+                onDrop={handleDrop}
+                className={`group flex min-h-[150px] cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed px-4 text-center transition-all duration-300 ease-in-out ${
+                  isDragging
+                    ? "scale-[1.01] border-cyan-400 bg-cyan-500/10 shadow-[0_0_35px_rgba(56,189,248,0.25)]"
+                    : "border-white/15 bg-slate-950/40 hover:border-cyan-400/50 hover:bg-cyan-500/[0.04] hover:shadow-[0_0_25px_rgba(56,189,248,0.12)]"
+                }`}
+              >
+                <span className="grid size-10 place-items-center rounded-xl border border-cyan-400/30 bg-cyan-500/10 text-xl text-cyan-300 transition-all duration-300 group-hover:border-cyan-300/60 group-hover:shadow-[0_0_20px_rgba(56,189,248,0.2)]">
+                  +
+                </span>
+                <span className="mt-3 text-[12px] font-medium text-white">Drop .csv, .txt, or .md files</span>
+                <span className="mt-1 text-[11px] text-slate-400">
+                  or <span className="text-cyan-300 underline underline-offset-2">browse your device</span>
+                </span>
+                <span className="mt-3 text-[10px] text-slate-500">Text is read in your browser before publishing</span>
+              </div>
             </div>
 
-            {draftNotice && (
-              <div role="status" className="border border-emerald-500/20 bg-emerald-950/40 px-3 py-2 text-[11px] text-[#D1FAE5]">
-                {draftNotice}
-              </div>
+            {draftFiles.length > 0 && (
+              <ul className="divide-y divide-white/[0.06] rounded-xl border border-white/10 bg-slate-950/40 px-3">
+                {draftFiles.map((file) => (
+                  <li key={file.id} className="flex items-center justify-between gap-3 py-2.5">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-cyan-400/25 bg-cyan-500/10 text-[9px] text-cyan-200">
+                        {fileExtension(file.name)}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-[11px] text-slate-100">{file.name}</span>
+                        <span className="mt-0.5 block text-[10px] text-slate-500">{formatBytes(file.size)} · ready</span>
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => removeDraftFile(file.id)}
+                      className="shrink-0 px-2 py-1 text-[10px] text-slate-400 transition hover:text-rose-300"
+                      aria-label={`Remove ${file.name}`}
+                    >
+                      REMOVE
+                    </button>
+                  </li>
+                ))}
+              </ul>
             )}
 
-            <div className="border border-emerald-500/20 bg-[#0B0F17]/50">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-500/20 px-3 py-2.5">
-                <h4 className="text-[11px] uppercase tracking-[0.14em] text-[#A7B9B0]">
-                  My published vaults
-                </h4>
-                <span className="border border-emerald-500/20 px-1.5 py-0.5 font-mono text-[9px] text-[#34D399]">
-                  {myVaults.length}
+            <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_150px]">
+              <label className="min-w-0">
+                <span className="mb-1.5 block text-[11px] text-slate-400">Dataset title</span>
+                <input
+                  value={draftTitle}
+                  onChange={(event) => setDraftTitle(event.target.value)}
+                  maxLength={80}
+                  placeholder="Q4 Revenue & Retention"
+                  className="h-10 w-full rounded-lg border border-white/10 bg-slate-950/60 px-3 text-[12px] text-slate-100 outline-none transition-all duration-300 placeholder:text-slate-500 focus:border-cyan-400/60 focus:shadow-[0_0_20px_rgba(56,189,248,0.12)]"
+                />
+                <span className="mt-1 block text-[9px] text-slate-500">{draftTitle.length} / 80</span>
+              </label>
+              <label>
+                <span className="mb-1.5 block text-[11px] text-slate-400">Price per query</span>
+                <span className="relative block">
+                  <input
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    value={draftPrice}
+                    onChange={(event) => setDraftPrice(event.target.value)}
+                    className="h-10 w-full rounded-lg border border-white/10 bg-slate-950/60 px-3 pr-12 text-[12px] text-slate-100 outline-none transition-all duration-300 placeholder:text-slate-500 focus:border-cyan-400/60 focus:shadow-[0_0_20px_rgba(56,189,248,0.12)]"
+                  />
+                  <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-slate-500">
+                    NEAR
+                  </span>
                 </span>
-              </div>
-
-              {myVaults.length === 0 ? (
-                <p className="px-3 py-4 text-[11px] leading-5 text-[#7D9187]">
-                  You have no live vaults. Publish below to list a dataset in the enclave marketplace.
-                </p>
-              ) : (
-                <ul className="divide-y divide-white/[0.06]">
-                  {myVaults.map((vault) => (
-                    <li key={vault.id} className="flex flex-col gap-3 px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="min-w-0">
-                        <div className="truncate text-[12px] font-medium text-[#F0FDF4]">{vault.title}</div>
-                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-[#7D9187]">
-                          <span className="font-mono text-[#34D399]">{vault.priceNear} NEAR / query</span>
-                          <span>{vault.rows.toLocaleString("en-US")} rows</span>
-                          <span>Earned {formatNearAmount(publisherEarnings(vault.seller))}</span>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleUnpublish(vault.id)}
-                        className="w-full shrink-0 border border-[#F87171]/40 bg-[#F87171]/10 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#FCA5A5] transition hover:border-[#F87171] hover:bg-[#F87171]/20 sm:w-auto"
-                        aria-label={`Unpublish vault ${vault.title}`}
-                      >
-                        Unpublish / Remove Vault
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
+              </label>
             </div>
 
-            <form onSubmit={handlePublish} className="space-y-4">
-              <div>
-                <span className="mb-2 block text-[11px] text-[#A7B9B0]">Dataset files</span>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  accept=".pdf,.csv,.txt"
-                  className="sr-only"
-                  onChange={handleDraftFileChange}
-                  aria-label="Select a PDF, CSV, or text dataset"
-                />
-                <div
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => fileInputRef.current?.click()}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      fileInputRef.current?.click();
-                    }
-                  }}
-                  onDragEnter={(event) => { event.preventDefault(); setIsDragging(true); }}
-                  onDragOver={(event) => event.preventDefault()}
-                  onDragLeave={(event) => {
-                    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsDragging(false);
-                  }}
-                  onDrop={handleDrop}
-                  className={`group flex min-h-[150px] cursor-pointer flex-col items-center justify-center border border-dashed px-4 text-center transition-colors ${
-                    isDragging
-                      ? "border-[#10B981] bg-[#10B981]/[0.06]"
-                      : "border-emerald-500/25 bg-[#0B0F17]/60 hover:border-[#34D399] hover:bg-emerald-950/30"
-                  }`}
-                >
-                  <span className="grid size-10 place-items-center border border-[#34D399]/45 bg-[#34D399]/[0.06] text-xl text-[#10B981] transition group-hover:border-[#10B981]/70">
-                    +
-                  </span>
-                  <span className="mt-3 text-[12px] font-medium text-[#F0FDF4]">Drop .pdf, .csv, or .txt files</span>
-                  <span className="mt-1 text-[11px] text-[#A7B9B0]">
-                    or <span className="text-[#34D399] underline underline-offset-2">browse your device</span>
-                  </span>
-                  <span className="mt-3 text-[10px] text-[#7D9187]">Parsed locally · no network request</span>
-                </div>
-              </div>
-
-              {draftFiles.length > 0 && (
-                <ul className="divide-y divide-white/[0.06] border-y border-white/[0.07]">
-                  {draftFiles.map((file) => (
-                    <li key={file.id} className="flex items-center justify-between gap-3 py-2.5">
-                      <div className="flex min-w-0 items-center gap-3">
-                        <span className="grid size-8 shrink-0 place-items-center border border-emerald-500/20 text-[9px] text-[#34D399]">
-                          {fileExtension(file.name)}
-                        </span>
-                        <span className="min-w-0">
-                          <span className="block truncate text-[11px] text-[#D1FAE5]">{file.name}</span>
-                          <span className="mt-0.5 block text-[10px] text-[#7D9187]">{formatBytes(file.size)} · ready</span>
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => removeDraftFile(file.id)}
-                        className="shrink-0 px-2 py-1 text-[10px] text-[#A7B9B0] hover:text-[#FCA5A5]"
-                        aria-label={`Remove ${file.name}`}
-                      >
-                        REMOVE
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-
-              <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_150px]">
-                <label className="min-w-0">
-                  <span className="mb-1.5 block text-[11px] text-[#A7B9B0]">Dataset title</span>
-                  <input
-                    value={draftTitle}
-                    onChange={(event) => setDraftTitle(event.target.value)}
-                    maxLength={80}
-                    placeholder="Q4 Revenue & Retention"
-                    className="h-10 w-full border border-emerald-500/20 bg-[#0B0F17]/80 px-3 text-[12px] text-[#E2F8EC] outline-none transition placeholder:text-[#7D9187] focus:border-[#10B981]/60"
-                  />
-                  <span className="mt-1 block text-[9px] text-[#7D9187]">{draftTitle.length} / 80</span>
-                </label>
-                <label>
-                  <span className="mb-1.5 block text-[11px] text-[#A7B9B0]">Price per query</span>
-                  <span className="relative block">
-                    <input
-                      type="number"
-                      min="0.01"
-                      step="0.01"
-                      value={draftPrice}
-                      onChange={(event) => setDraftPrice(event.target.value)}
-                      className="h-10 w-full border border-emerald-500/20 bg-[#0B0F17]/80 px-3 pr-12 text-[12px] text-[#E2F8EC] outline-none transition placeholder:text-[#7D9187] focus:border-[#10B981]/60"
-                    />
-                    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-[#7D9187]">
-                      NEAR
-                    </span>
-                  </span>
-                </label>
-              </div>
-
+            <div className="grid gap-3 sm:grid-cols-2">
               <label className="block">
-                <span className="mb-1.5 block text-[11px] text-[#A7B9B0]">Description</span>
+                <span className="mb-1.5 block text-[11px] text-slate-400">Description</span>
                 <textarea
                   value={draftDescription}
                   onChange={(event) => setDraftDescription(event.target.value)}
                   rows={2}
                   maxLength={220}
                   placeholder="What can buyers learn from this vault?"
-                  className="w-full resize-y border border-emerald-500/20 bg-[#0B0F17]/80 px-3 py-2 text-[12px] leading-5 text-[#E2F8EC] outline-none transition placeholder:text-[#7D9187] focus:border-[#10B981]/60"
+                  className="w-full resize-y rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-[12px] leading-5 text-slate-100 outline-none transition-all duration-300 placeholder:text-slate-500 focus:border-cyan-400/60 focus:shadow-[0_0_20px_rgba(56,189,248,0.12)]"
                 />
               </label>
 
               <label className="block">
-                <span className="mb-1.5 block text-[11px] text-[#A7B9B0]">Payout address</span>
+                <span className="mb-1.5 block text-[11px] text-slate-400">Payout address</span>
                 <input
                   value={providerAddress}
                   onChange={(event) => onProviderAddressChange(event.target.value)}
-                  maxLength={128}
-                  placeholder="you.near"
-                  className="h-10 w-full border border-emerald-500/20 bg-[#0B0F17]/80 px-3 text-[12px] text-[#E2F8EC] outline-none transition placeholder:text-[#7D9187] focus:border-[#10B981]/60"
+                  maxLength={64}
+                  placeholder={walletAccountId ?? "your-account.testnet"}
+                  className="h-10 w-full rounded-lg border border-white/10 bg-slate-950/60 px-3 font-mono text-[12px] text-slate-100 outline-none transition-all duration-300 placeholder:text-slate-500 focus:border-cyan-400/60 focus:shadow-[0_0_20px_rgba(56,189,248,0.12)]"
                 />
+                <span className={`mt-1 block text-[9px] ${providerAddress && !providerAddressValid ? "text-rose-300" : "text-slate-500"}`}>
+                  {providerAddress && !providerAddressValid
+                    ? "Not a valid NEAR account ID."
+                    : "Used as the publisher identity. Payout execution is not implemented in this prototype."}
+                </span>
               </label>
-
-              <button
-                type="submit"
-                disabled={!canPublish}
-                className="flex h-11 w-full items-center justify-center gap-2 bg-emerald-500 text-[12px] font-semibold text-slate-950 shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-[#047857] disabled:text-[#A7B9B0]"
-              >
-                Publish to TEE Marketplace
-                <span aria-hidden="true">→</span>
-              </button>
-              <p className="text-center text-[10px] leading-4 text-[#7D9187]">
-                Publishing is local to this demo. No data or funds leave the browser.
-              </p>
-            </form>
-
-            <div className="border border-emerald-500/20 bg-[#0B0F17]/50">
-              <div className="border-b border-emerald-500/20 px-3 py-2.5">
-                <h4 className="text-[11px] uppercase tracking-[0.14em] text-[#A7B9B0]">
-                  Enclave audit log
-                </h4>
-              </div>
-              {auditLog.length === 0 ? (
-                <p className="px-3 py-4 text-[11px] leading-5 text-[#7D9187]">
-                  No marketplace changes yet. Withdrawing a vault records an entry here.
-                </p>
-              ) : (
-                <ul className="divide-y divide-white/[0.06]">
-                  {auditLog.map((entry) => (
-                    <li key={entry.id} className="flex flex-col gap-1 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
-                      <span className="min-w-0 text-[11px] leading-5 text-[#D1FAE5]">{entry.message}</span>
-                      <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.12em] text-[#7D9187]">
-                        {entry.timestamp}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
             </div>
+
+            <button
+              type="submit"
+              disabled={!canPublish}
+              className="flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-cyan-500 to-purple-500 text-[12px] font-semibold text-slate-950 shadow-[0_0_25px_rgba(34,211,238,0.25)] transition-all duration-300 hover:brightness-110 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:bg-none disabled:text-slate-500 disabled:shadow-none"
+            >
+              {walletAccountId ? "Publish to marketplace session" : "Connect wallet to publish"}
+              <span aria-hidden="true">→</span>
+            </button>
+            <p className="text-center text-[10px] leading-4 text-slate-500">
+              Sample listings settle query fees to the real BlindSight treasury. Publisher payouts are
+              not executed in this prototype.
+            </p>
+          </form>
+        </section>
+      )}
+
+      {activeTab === "explorer" && (
+        <section
+          role="tabpanel"
+          id="explorer-panel"
+          aria-labelledby="explorer-tab"
+          className="animate-fade-up space-y-5 rounded-2xl border border-white/10 bg-slate-900/70 p-6 backdrop-blur-xl transition-all duration-300"
+        >
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h3 className="bg-gradient-to-r from-white via-cyan-100 to-purple-200 bg-clip-text text-[12px] font-semibold text-transparent animate-shimmer">Active vaults</h3>
+              <p className="mt-1 text-[11px] leading-5 text-slate-400">
+                Select a vault to open it in the Query Gateway. No file upload required.
+              </p>
+            </div>
+            <span className="inline-flex items-center gap-2 rounded-full border border-cyan-400/25 bg-cyan-500/10 px-2.5 py-1 text-[10px] text-cyan-200">
+              <span className="size-1.5 rounded-full bg-cyan-400 animate-pulse-glow" />
+              {vaults.length} vaults online
+            </span>
           </div>
-        )}
-      </div>
-    </section>
-    {notification && (
-      <div
-        role="status"
-        className="fixed bottom-5 right-5 z-50 max-w-[min(460px,calc(100vw-40px))] border border-emerald-500/25 bg-emerald-950/95 px-4 py-3 text-xs leading-5 text-[#D1FAE5] shadow-2xl shadow-black/40"
-      >
-        {notification}
-      </div>
-    )}
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            {vaults.map((vault, index) => {
+              const isSelected = vault.id === selectedVault?.id;
+              return (
+                <button
+                  key={vault.id}
+                  type="button"
+                  onClick={() => {
+                    handleSelectVault(vault.id);
+                    onTabChange("gateway");
+                  }}
+                  aria-pressed={isSelected}
+                  style={{ animationDelay: `${index * 60}ms` }}
+                  className={`group relative flex h-full flex-col rounded-xl border p-4 text-left transition-all duration-300 ease-in-out animate-fade-up ${
+                    isSelected
+                      ? "border-cyan-400/50 bg-gradient-to-br from-cyan-500/10 to-purple-500/10 shadow-[0_0_25px_rgba(56,189,248,0.15)]"
+                      : "border-white/10 bg-slate-950/40 hover:border-cyan-400/40 hover:bg-white/[0.04] hover:shadow-[0_0_20px_rgba(56,189,248,0.1)]"
+                  }`}
+                >
+                  <span className="flex items-start justify-between gap-3">
+                    <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-1 text-[9px] uppercase tracking-[0.14em] text-slate-300">
+                      {vault.category}
+                    </span>
+                    {isSelected ? (
+                      <span className="flex items-center gap-1.5 text-[9px] uppercase tracking-[0.12em] text-cyan-200">
+                        <span className="size-1.5 rounded-full bg-cyan-400 animate-pulse-glow" />
+                        Selected
+                      </span>
+                    ) : (
+                      <span className="text-[12px] text-slate-500 transition group-hover:text-cyan-300" aria-hidden="true">
+                        →
+                      </span>
+                    )}
+                  </span>
+
+                  <span className="mt-3 block text-[13px] font-medium text-white">{vault.title}</span>
+                  <span className="mt-2 line-clamp-2 block text-[11px] leading-5 text-slate-400">
+                    {vault.description}
+                  </span>
+
+                  <span className="mt-auto flex items-end justify-between gap-3 pt-4">
+                    <span>
+                      <span className="block text-[9px] uppercase tracking-[0.14em] text-slate-500">Price</span>
+                      <span className="mt-1 block bg-gradient-to-r from-cyan-200 via-white to-purple-200 bg-clip-text font-mono text-[13px] text-transparent animate-shimmer">
+                        {vault.priceNear} <span className="text-[10px] font-normal text-slate-400">NEAR</span>
+                      </span>
+                    </span>
+                    <span className="text-right text-[10px] text-slate-500">
+                      <span className="block text-cyan-200">
+                        {vault.source === "sample" ? "Sample dataset" : "Session dataset"}
+                      </span>
+                      <span className="mt-0.5 block">{formatNumber(vault.rows)} rows · {vault.updated}</span>
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {activeTab === "audit" && (
+        <section
+          role="tabpanel"
+          id="audit-panel"
+          aria-labelledby="audit-tab"
+          className="animate-fade-up space-y-5 rounded-2xl border border-white/10 bg-slate-900/70 p-6 backdrop-blur-xl transition-all duration-300"
+        >
+          <div>
+            <h3 className="bg-gradient-to-r from-white via-cyan-100 to-purple-200 bg-clip-text text-[12px] font-semibold text-transparent animate-shimmer">Payment audit</h3>
+            <p className="mt-1 text-[11px] leading-5 text-slate-400">
+              Real NEAR testnet settlement state and client-side activity.
+            </p>
+          </div>
+          <div className="animate-fade-up" style={{ animationDelay: "80ms" }}>
+            <PaymentAudit
+              nearAccountId={nearAccountId}
+              treasuryAccount={treasuryAccount}
+              auditLog={auditLog}
+            />
+          </div>
+        </section>
+      )}
+
+      {notification && (
+        <div
+          role="status"
+          className="fixed bottom-5 right-5 z-50 max-w-[min(460px,calc(100vw-40px))] rounded-xl border border-cyan-400/25 bg-slate-950/95 px-4 py-3 text-xs leading-5 text-cyan-100 shadow-2xl shadow-cyan-500/10 backdrop-blur-xl"
+        >
+          {notification}
+        </div>
+      )}
     </>
   );
 }

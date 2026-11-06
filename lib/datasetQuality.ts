@@ -2,19 +2,11 @@ import { randomUUID } from "node:crypto";
 
 export const DATASET_QUALITY_ERROR = "Dataset rejected: File structure does not meet quality standards.";
 
-const SEEDED_DEFI_DATASET = `protocol,day,pool,liquidity_usd,volume_usd
-NEARSwap,2026-10-24,NEAR-USDC,1840000,426000
-Ref Finance,2026-10-24,USDC-USDT,2310000,518000
-Burrow,2026-10-25,NEAR-USDC,1675000,392000
-NEAR Intents,2026-10-25,USDC-USDT,2840000,733000
-Ref Finance,2026-10-26,NEAR-USDC,1930000,481000`;
-
 export type PreparedDataset = {
   datasetForInference: string;
   rowCount: number;
   columns: string[];
   columnIndex: Record<string, string[]>;
-  isFallback: boolean;
 };
 
 type CachedPreparedDataset = { dataset: PreparedDataset; expiresAt: number };
@@ -52,6 +44,17 @@ export function getCachedPreparedDataset(datasetId: unknown) {
   return entry.dataset;
 }
 
+/**
+ * Drops a prepared dataset from the in-memory enclave cache. The query route
+ * calls this after inference to mimic the TEE lifecycle: the dataset exists
+ * only for the duration of the request that uses it. This does not zero heap
+ * memory (JavaScript cannot guarantee that); it removes the application-level
+ * reference and prevents reuse by a later request.
+ */
+export function deleteCachedPreparedDataset(datasetId: unknown) {
+  if (typeof datasetId === "string") preparedDatasets.delete(datasetId);
+}
+
 type DatasetSection = { name: string; content: string };
 type DatasetRecord = Record<string, string>;
 
@@ -59,11 +62,14 @@ function splitSections(dataset: string): DatasetSection[] {
   const headers = Array.from(dataset.matchAll(/^### ([^\r\n]+)\r?\n/gm));
   if (!headers.length) {
     const trimmed = dataset.trim();
+    // Sniff the delimiter from the header line only, so prose that happens to
+    // contain commas is not misread as CSV.
+    const firstLine = trimmed.split(/\r?\n/, 1)[0] ?? "";
     const name = trimmed.startsWith("{") || trimmed.startsWith("[")
       ? "dataset.json"
-      : trimmed.includes("\t")
+      : firstLine.includes("\t")
         ? "dataset.tsv"
-        : trimmed.includes(",")
+        : firstLine.includes(",")
           ? "dataset.csv"
           : "dataset.txt";
     return [{ name, content: trimmed }];
@@ -168,7 +174,7 @@ function recordsFromSection(section: DatasetSection): DatasetRecord[] {
     });
   }
 
-  if (extension === "txt" || extension === "pdf") {
+  if (extension === "txt" || extension === "md" || extension === "markdown" || extension === "pdf") {
     const lines = section.content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
     if (!lines.length) throw new Error(DATASET_QUALITY_ERROR);
     return lines.map((line) => ({ text: line }));
@@ -207,9 +213,9 @@ export function prepareDataset(rawDataset: unknown): PreparedDataset {
   const incomingSections = typeof rawDataset === "string" && rawDataset.trim()
     ? splitSections(rawDataset).filter((section) => !isEmptySection(section))
     : [];
-  const isFallback = incomingSections.length === 0;
-  const sections = isFallback ? splitSections(SEEDED_DEFI_DATASET) : incomingSections;
-  const records = sections.flatMap(recordsFromSection);
+  // No seeded fallback: an empty or missing dataset is rejected outright.
+  if (incomingSections.length === 0) throw new Error(DATASET_QUALITY_ERROR);
+  const records = incomingSections.flatMap(recordsFromSection);
   const columns = Array.from(new Set(records.flatMap((record) => Object.keys(record))));
   if (!records.length || !columns.length) throw new Error(DATASET_QUALITY_ERROR);
 
@@ -222,6 +228,5 @@ export function prepareDataset(rawDataset: unknown): PreparedDataset {
     rowCount: records.length,
     columns,
     columnIndex,
-    isFallback,
   };
 }
