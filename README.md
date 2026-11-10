@@ -27,7 +27,7 @@ verify the payment and the answer independently.
 | Query payment | **Real** | The buyer signs a native NEAR transfer. Sample-vault fees go to the funded treasury; published-vault fees go to the publisher's configured payout account. |
 | Payment verification | **Real** | The server fetches the finalized transaction from `https://rpc.testnet.fastnear.com` and checks signer, receiver, amount, execution status, and age. |
 | Answer gating | **Real** | `/api/verify-payment` confirms the transfer, then `/api/query-tee` re-verifies the same hash before inference runs. |
-| AI inference | **Real** | The server calls NEAR AI Cloud (`zai-org/GLM-5.1-FP8`) with `NEAR_AI_API_KEY`. |
+| AI inference | **Real** | The server calls NEAR AI Cloud (`z-ai/glm-5.3`) with `NEAR_AI_API_KEY`. |
 | Sample datasets | **Fictional data, real gating** | Three synthetic datasets live in server-only code. The browser only sends a `vaultId`. |
 | Dataset lifecycle | **Prototype enclave (mimicked)** | The route drops its prepared dataset reference after inference. JavaScript cannot guarantee heap zeroing, and this is not hardware isolation. |
 | TEE / enclave attestation | **Mimicked** | No hardware attestation exists and the UI does not display a fake attestation token. The interface labels the enclave as a server-side prototype. |
@@ -35,7 +35,6 @@ verify the payment and the answer independently.
 | Shared vault storage | **Pinata IPFS** | Published metadata is pinned as public JSON and discovered through the shared Pinata account. Dataset content is encrypted before pinning; listing responses contain metadata only. |
 | Anti-probing checks | **Best effort** | In-memory query history and pattern checks per server instance. Not a guarantee against dataset reconstruction. |
 | Replay protection | **Best effort** | In-memory, per-instance map with a 24-hour TTL. It is not a network-wide nonce. |
-| Gloam private rail | **Implemented, optional** | A real shielded ETH transfer on Robinhood Chain testnet, settled and swept server-side before the answer. It is hidden until `NEXT_PUBLIC_GLOAM_ENABLED=true`, after the end-to-end test passes. See [Private payments](#private-payments-optional). |
 
 There are no local balances, mock addresses, fake transaction hashes, or simulated payment-success
 paths in the app. The only external prerequisite is testnet NEAR for the query fee; use the
@@ -189,11 +188,6 @@ cp .env.example .env.local
 | `PINATA_SECRET_API_KEY` | Required for published vaults | Pinata server-side secret. Never expose it with a `NEXT_PUBLIC_` prefix. |
 | `PUBLISHED_VAULT_ENCRYPTION_KEY` | Required for published vaults | Stable 32-byte hex key for AES-256-GCM dataset encryption. Back it up; rotating it makes existing uploads unreadable. |
 | `PINATA_GATEWAY_URL` | Optional | Custom IPFS gateway base URL. Defaults to `https://gateway.pinata.cloud`. |
-| `GLOAM_RECEIVE_KEY` | Private rail | JSON receive identity from `npm run gloam:keygen`. Opens and sweeps private payments. |
-| `GLOAM_NOTE_STORE_KEY` | Private rail | 32-byte hex key that encrypts the settled note/receipt store at rest. |
-| `GLOAM_NOTE_STORE_PATH` | Optional | Override the encrypted store path. Defaults to `.gloam-data/notes.enc.json`. |
-| `GLOAM_CIRCUIT_CACHE_PATH` | Optional | Override where the server caches proof artifacts. Defaults to the OS temp directory. |
-| `NEXT_PUBLIC_GLOAM_ENABLED` | Optional | Set `true` only after the private testnet flow passes. Hides the private payment control by default. |
 
 If you point the treasury at a different account, it must exist on testnet and the buyer must be able
 to transfer to it. Verification only needs the public account address.
@@ -210,9 +204,6 @@ Keep the encryption key stable and back it up. Metadata is pinned as JSON, and t
 app-tagged metadata pins provide the shared discovery index. Dataset bytes are encrypted before
 they are pinned separately. Without these values, sample vaults continue to work, while shared
 listing and publishing are unavailable.
-
-The default NEAR rail needs no Gloam configuration. Without the `GLOAM_*` values the private
-endpoints answer `503` and the rest of the app works normally.
 
 Without `NEAR_AI_API_KEY`, the app still boots and payments still verify, but a paid query returns
 `INFERENCE_NOT_CONFIGURED`. The confirmed payment stays retryable after you add the key.
@@ -244,7 +235,6 @@ app/
     verify-payment/route.ts    Explicit "payment confirmed" endpoint
     query-tee/route.ts         Re-verify payment, resolve dataset, run inference
     vaults/route.ts            Shared IPFS marketplace listing and publishing
-    gloam/requirements/route.ts  Public price + receive tag for private payments
     vault/parse/route.ts       Real text/PDF extraction (rejects unreadable files)
 components/
   QueryVault.tsx               Paid query console and stage machine
@@ -261,13 +251,8 @@ lib/
   demoVaultDatasets.ts         Server-only synthetic datasets
   publishedVaults.ts           Pinata metadata discovery and encrypted IPFS datasets
   datasetQuality.ts            Dataset preparation and in-memory cache
-  gloamConfig.ts               Shared private-rail network and price
-  evm-gloam.ts                 Browser shield/prove/pay helper
-  gloamServer.ts               Server settlement, sweep, encrypted note store
   auditLog.ts                  Client audit-log entry type
 scripts/
-  gloam-keygen.mjs             Generate the receive identity + store key
-  gloam-testnet-e2e.mjs        Real shield → prove → pay → answer test
 ```
 
 ---
@@ -303,26 +288,6 @@ Returns:
 
 Failures return `{ success: false, verified: false, error, code }` with a 4xx status.
 
-### `GET /api/gloam/requirements?vaultId=…`
-
-Returns the public price and receive tag for the optional private rail. The receive key never leaves
-the server.
-
-```json
-{
-  "success": true,
-  "requirements": {
-    "scheme": "gloam-private",
-    "network": 46630,
-    "maxAmountRequired": "200000000000000",
-    "asset": "0x0000000000000000000000000000000000000000",
-    "payTo": "gloamr1.…",
-    "resource": "blindsight:query:q3-financial-market-demand",
-    "poolAddress": "0x…"
-  }
-}
-```
-
 ### `POST /api/query-tee`
 
 ```json
@@ -337,10 +302,6 @@ the server.
 The server re-verifies the transfer, resolves sample data from the server catalog or published data
 from IPFS, and then calls inference. Published dataset text is never included in the listing
 response or sent back to the buyer.
-
-For the private rail, send the same shape with `"paymentType": "GLOAM"` and the sealed `payload`
-returned by `buildGloamPayment` instead of a NEAR `txHash`. The server settles and sweeps that payload
-before inference runs; there is no separate verification call.
 
 A successful response includes `insight`, `receiptId` (the verified transaction hash), `payment`,
 `inference` metadata, and a `prototype` object that states the TEE is mimicked and that the dataset
@@ -360,53 +321,6 @@ The server authenticates the payer from the on-chain signer and receiver, so no 
 needed for the payment step. The inference key stays on the server.
 
 ---
-
-## Private payments (optional)
-
-The native NEAR rail is the default. BlindSight also ships a real **Gloam** rail for buyers who want
-the amount and payer hidden. It is a separate EVM stack on **Robinhood Chain testnet (46630)**, so it
-needs an injected EVM wallet such as MetaMask and a little testnet ETH.
-
-What is real:
-
-- **Deposit (shield).** The buyer deposits native ETH into Gloam's shielded pool with a Groth16 proof
-  generated in the browser by `@gloamtrade/sdk` + `snarkjs`.
-- **Private payment.** For a question, the browser builds a zero-knowledge private transfer to
-  BlindSight's published receive tag. The amount, sender, and recipient do not appear on chain.
-- **Server settlement.** `settleGloamQueryPayment` opens the sealed note, verifies the amount binding,
-  checks the on-chain nullifier, and **sweeps** the payment into a fresh note only the server can
-  spend. Access is granted only when the sweep is final.
-- **No double charge.** A failed inference releases the receipt so the same settled payment can be
-  retried. The payer's change note stays in the browser for later questions.
-
-### Configure
-
-```bash
-npm run gloam:keygen
-```
-
-Copy the two printed values into `.env.local` (`GLOAM_RECEIVE_KEY` and `GLOAM_NOTE_STORE_KEY`), then
-restart the server. Keep `GLOAM_RECEIVE_KEY` stable: it is the only key that can open incoming
-payments.
-
-### Test end to end before exposing it
-
-```bash
-# with the app running on http://localhost:3000 and the GLOAM_* values set
-PAYER_PRIVATE_KEY=0x... npm run gloam:test
-```
-
-The script asks the app for the price and receive tag, shields testnet ETH if the payer has no note,
-proves and broadcasts the private transfer, then posts the paid question to `/api/query-tee`. It
-prints the answer and keeps the change note in `.gloam-e2e-notes.json`. Fund the payer from the
-Robinhood Chain testnet faucet first.
-
-Only after that succeeds, set `NEXT_PUBLIC_GLOAM_ENABLED=true` to show the private payment control in
-the marketplace. Until then the rail stays completely out of the UI.
-
-The server stores settled notes and receipts in an AES-256-GCM file. On a multi-instance deployment,
-point `GLOAM_NOTE_STORE_PATH` at shared storage, or use a single instance, so a retry sees the same
-settled receipt.
 
 ---
 

@@ -6,27 +6,21 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint",
-    "gloam:keygen": "node scripts/gloam-keygen.mjs",
-    "gloam:test": "node scripts/gloam-testnet-e2e.mjs"
+    "lint": "eslint"
   },
   "dependencies": {
-    "@gloamtrade/sdk": "^0.6.0",
     "@near-wallet-selector/core": "^10.1.4",
     "@near-wallet-selector/meteor-wallet": "^10.1.4",
     "@near-wallet-selector/modal-ui": "^10.1.4",
     "@near-wallet-selector/my-near-wallet": "^10.1.4",
     "dotenv": "^18.0.9",
-    "ethers": "^6.17.0",
     "lucide-react": "^1.65.0",
     "near-api-js": "^7.4.0",
     "next": "16.4.3",
     "openai": "^7.43.0",
     "pdf-parse": "^2.4.5",
     "react": "19.3.0",
-    "react-dom": "19.3.0",
-    "snarkjs": "^0.7.6",
-    "viem": "^2.57.16"
+    "react-dom": "19.3.0"
   },
   "devDependencies": {
     "@tailwindcss/turbopack": "^4",

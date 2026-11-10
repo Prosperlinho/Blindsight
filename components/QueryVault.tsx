@@ -52,6 +52,15 @@ class QueryError extends Error {
 const ANSWER_RETRY_MESSAGE = "We couldn't get your answer this time. Your question is ready to try again.";
 
 function toQueryError(status: number, code?: string): QueryError {
+  if (code === "INFERENCE_NOT_CONFIGURED") {
+    return new QueryError("Inference is not configured. Your payment is confirmed; retry after the server key is configured.", true);
+  }
+  if (code === "INFERENCE_INVALID_API_KEY") {
+    return new QueryError("NEAR AI rejected the server key. Your payment is confirmed; retry after the key is corrected.", true);
+  }
+  if (code === "INFERENCE_ACCESS_DENIED") {
+    return new QueryError("NEAR AI denied model access. Your payment is confirmed; retry after access is corrected.", true);
+  }
   if (status === 429) {
     return new QueryError("Too many similar questions. Try asking something broader.", false);
   }
@@ -210,7 +219,8 @@ async function readStreamedAnswer(
       return;
     }
     if (frameData.type === "error") {
-      throw new QueryError(ANSWER_RETRY_MESSAGE, true);
+      const message = typeof frameData.error === "string" ? frameData.error : ANSWER_RETRY_MESSAGE;
+      throw new QueryError(message, true);
     }
     if (frameData.type === "done") {
       const finalInsight = typeof frameData.insight === "string" ? frameData.insight.trim() : "";

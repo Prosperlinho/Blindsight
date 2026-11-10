@@ -1,7 +1,5 @@
 import { NextResponse } from "next/server";
 import { getDemoVault } from "@/lib/demoVaults";
-import { gloamExplorerTxUrl } from "@/lib/gloamConfig";
-import { settleGloamQueryPayment } from "@/lib/gloamServer";
 import { getPublishedVault } from "@/lib/publishedVaults";
 import { getTreasuryAccount, nearToYocto } from "@/lib/paymentConfig";
 import {
@@ -10,12 +8,8 @@ import {
 } from "@/lib/paymentVerification";
 
 /**
- * Step 2 of the paid-query flow: confirm that the wallet's transfer really
- * landed on NEAR testnet before the UI says "payment confirmed".
- *
- * The client calls this immediately after signing, then calls
- * `/api/query-tee` with the same transaction hash. The second call re-verifies
- * the transfer so the answer endpoint never trusts the intermediate response.
+ * Confirm a wallet transfer on NEAR testnet before the UI reports payment.
+ * The query endpoint independently verifies the same transaction before inference.
  */
 
 export const maxDuration = 60;
@@ -25,9 +19,6 @@ type Body = {
   payerAccountId?: unknown;
   vaultId?: unknown;
   queryPrice?: unknown;
-  paymentType?: unknown;
-  rail?: unknown;
-  payload?: unknown;
 };
 
 export async function POST(request: Request) {
@@ -44,60 +35,6 @@ export async function POST(request: Request) {
   const txHash = typeof body.txHash === "string" ? body.txHash.trim() : "";
   const payerAccountId = typeof body.payerAccountId === "string" ? body.payerAccountId.trim() : "";
   const vaultId = typeof body.vaultId === "string" ? body.vaultId.trim() : "";
-  const paymentType = (typeof body.paymentType === "string" ? body.paymentType : typeof body.rail === "string" ? body.rail : "").toUpperCase();
-  const payload = body.payload;
-
-  if (paymentType === "GLOAM" || (payload !== undefined && payload !== null)) {
-    if (!vaultId) {
-      return NextResponse.json(
-        { success: false, error: "A vault is required to verify a private Gloam payment.", code: "MISSING_VAULT_ID" },
-        { status: 400 },
-      );
-    }
-
-    if (typeof payload !== "object" || Array.isArray(payload)) {
-      return NextResponse.json(
-        { success: false, error: "The private Gloam payment payload is missing or invalid.", code: "INVALID_GLOAM_PAYLOAD" },
-        { status: 400 },
-      );
-    }
-
-    try {
-      const receipt = await settleGloamQueryPayment({ vaultId, payload: payload as Parameters<typeof settleGloamQueryPayment>[0]["payload"] });
-      return NextResponse.json({
-        success: true,
-        verified: true,
-        payment: {
-          verified: true,
-          rail: "GLOAM",
-          receiptId: receipt.id,
-          txHash: receipt.txHash,
-          vaultId: receipt.vaultId,
-          resource: receipt.resource,
-          amountWei: receipt.amountWei,
-          state: receipt.state,
-          network: (payload as Record<string, unknown>).network ?? "robinhood",
-          verifiedAt: receipt.createdAt,
-          explorerUrl: gloamExplorerTxUrl(receipt.txHash),
-        },
-        expectedPriceNear: "0.0002",
-      });
-    } catch (error) {
-      console.error(
-        "[Payment Verification] Gloam settlement failed:",
-        error instanceof Error ? error.message : error,
-      );
-      return NextResponse.json(
-        {
-          success: false,
-          verified: false,
-          error: error instanceof Error ? error.message : "Private Gloam payment verification failed.",
-          code: "GLOAM_VERIFICATION_FAILED",
-        },
-        { status: 402 },
-      );
-    }
-  }
 
   if (!txHash) {
     return NextResponse.json(

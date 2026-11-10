@@ -12,14 +12,6 @@ import {
 import { getDemoVault } from "@/lib/demoVaults";
 import { getDemoVaultDataset } from "@/lib/demoVaultDatasets";
 import { getPublishedVault, getPublishedVaultDataset } from "@/lib/publishedVaults";
-import {
-  claimGloamQueryReceipt,
-  getGloamReceiveKey,
-  markGloamQueryReceiptConsumed,
-  releaseGloamQueryReceipt,
-  settleGloamQueryPayment,
-} from "@/lib/gloamServer";
-import { gloamExplorerTxUrl } from "@/lib/gloamConfig";
 import { getTreasuryAccount, nearToYocto } from "@/lib/paymentConfig";
 import {
   PaymentVerificationError,
@@ -29,7 +21,7 @@ import {
 
 export const maxDuration = 60;
 
-const MODEL = "zai-org/GLM-5.1-FP8";
+const MODEL = "z-ai/glm-5.3";
 const MAX_DATASET_LENGTH = 32_000;
 const MAX_QUERY_LENGTH = 2_000;
 const DATASET_TRUNCATION_NOTE = "[Dataset truncated to fit the inference context]";
@@ -76,19 +68,7 @@ type QueryHistoryEntry = {
   receiptId: string;
 };
 
-type QueryPayment = VerifiedNearPayment | {
-  verified: boolean;
-  network: string;
-  txHash: string;
-  payerAccountId: string;
-  receiverId: string;
-  amountNear: string;
-  amountYocto?: string;
-  amountWei?: string;
-  blockHash: string | null;
-  blockHeight: number | null;
-  verifiedAt: string | number;
-};
+type QueryPayment = VerifiedNearPayment;
 
 const queryPatterns = new Map<string, QueryPattern[]>();
 const queryHistory = new Map<string, QueryHistoryEntry[]>();
@@ -397,11 +377,12 @@ function errorResponse(status: number, error: string, extra: Record<string, unkn
   return NextResponse.json({ success: false, error, ...extra }, { status });
 }
 
-function logQueryFailure(stage: string, error: unknown) {
+function logQueryFailure(stage: string, error: unknown, secret?: string) {
   const details: Record<string, unknown> = { stage };
   if (error instanceof Error) {
     details.name = error.name;
-    details.message = error.message.slice(0, 300);
+    const message = secret ? error.message.replaceAll(secret, "[REDACTED]") : error.message;
+    details.message = message.slice(0, 300);
   } else {
     details.message = "Unknown error";
   }
@@ -412,10 +393,44 @@ function logQueryFailure(stage: string, error: unknown) {
   console.error("[Query] Request failed:", details);
 }
 
+function getInferenceStatus(error: unknown): number | undefined {
+  return typeof error === "object" && error !== null && "status" in error
+    && typeof error.status === "number" ? error.status : undefined;
+}
+
+function getInferenceCredentialFailure(error: unknown) {
+  const status = getInferenceStatus(error);
+  if (status === 401) {
+    return {
+      code: "INFERENCE_INVALID_API_KEY",
+      diagnostic: "NEAR AI rejected NEAR_AI_API_KEY.",
+      message: "NEAR AI rejected NEAR_AI_API_KEY. Verify the key in the deployment environment, then retry with this payment.",
+    };
+  }
+  if (status === 403) {
+    return {
+      code: "INFERENCE_ACCESS_DENIED",
+      diagnostic: "NEAR AI denied access to the configured model.",
+      message: "NEAR AI denied access to the configured model. Verify the key permissions and model access, then retry with this payment.",
+    };
+  }
+  return null;
+}
+
+function logInferenceFailure(stage: string, error: unknown, apiKey: string) {
+  const credentialFailure = getInferenceCredentialFailure(error);
+  if (credentialFailure) {
+    console.error(`[Query] ${credentialFailure.diagnostic}`, {
+      stage,
+      status: getInferenceStatus(error),
+    });
+    return;
+  }
+  logQueryFailure(stage, error, apiKey);
+}
+
 function isRetryableInferenceError(error: unknown): boolean {
-  const status = typeof error === "object" && error !== null && "status" in error
-    ? error.status
-    : undefined;
+  const status = getInferenceStatus(error);
   if (typeof status !== "number") return true;
   return status === 408 || status === 409 || status === 429 || status >= 500;
 }
@@ -424,41 +439,15 @@ function successResponse({
   insight,
   receiptId,
   payment,
-  settlementType,
 }: {
   insight: string;
   receiptId: string;
   payment: Record<string, unknown>;
-  settlementType: "VERIFIED_NEAR_TRANSFER" | "GLOAM_PRIVATE_PAYMENT";
 }) {
   // Privacy guardrail: only the generated insight and payment settlement
   // metadata leave the server. Dataset text, raw file buffers, file names,
   // and any other file metadata must never be returned to the client.
   const normalized = payment as Record<string, unknown>;
-
-  if (settlementType === "GLOAM_PRIVATE_PAYMENT") {
-    return NextResponse.json({
-      success: true,
-      insight,
-      receiptId,
-      settlementType: "GLOAM_PRIVATE_PAYMENT",
-      payment: {
-        verified: true,
-        rail: "GLOAM",
-        network: normalized.network ?? "robinhood",
-        txHash: normalized.txHash ?? receiptId,
-        payerAccountId: normalized.payerAccountId ?? "private-gloam",
-        receiverId: normalized.receiverId ?? getGloamReceiveKey().tag,
-        amountNear: normalized.amountNear ?? "0.0002",
-        amountWei: normalized.amountWei ?? "200000000000000",
-        amountYocto: normalized.amountYocto ?? "200000000000000",
-        blockHash: normalized.blockHash ?? null,
-        blockHeight: normalized.blockHeight ?? null,
-        verifiedAt: normalized.verifiedAt ?? Date.now(),
-        explorerUrl: gloamExplorerTxUrl(String(normalized.txHash ?? receiptId)),
-      },
-    });
-  }
 
   return NextResponse.json({
     success: true,
@@ -483,11 +472,10 @@ function successResponse({
 
 type StreamInferenceArgs = {
   client: OpenAI;
+  apiKey: string;
   messages: ChatCompletionMessageParam[];
   receiptId: string;
-  settlementType: "VERIFIED_NEAR_TRANSFER" | "GLOAM_PRIVATE_PAYMENT";
-  nearTxHash?: string;
-  gloamReceiptId: string | null;
+  nearTxHash: string;
   datasetId?: unknown;
 };
 
@@ -502,11 +490,10 @@ function sseFrame(payload: Record<string, unknown>) {
  */
 function streamInference({
   client,
+  apiKey,
   messages,
   receiptId,
-  settlementType,
   nearTxHash,
-  gloamReceiptId,
   datasetId,
 }: StreamInferenceArgs): Response {
   const encoder = new TextEncoder();
@@ -562,36 +549,26 @@ function streamInference({
         const insight = normalizeInsight(collected);
         if (!insight) throw new Error("The inference gateway returned no insight.");
 
-        if (settlementType === "VERIFIED_NEAR_TRANSFER" && nearTxHash) {
-          markPaymentSettled(nearTxHash);
-        }
-        if (gloamReceiptId) {
-          await markGloamQueryReceiptConsumed(gloamReceiptId);
-        }
+        markPaymentSettled(nearTxHash);
 
         completed = true;
         send(controller, {
           type: "done",
           insight,
           receiptId,
-          settlementType,
+          settlementType: "VERIFIED_NEAR_TRANSFER",
         });
       } catch (error) {
         const aborted = abortController.signal.aborted;
-        logQueryFailure(aborted ? "inference-stream-timeout" : "inference-stream", error);
-        if (gloamReceiptId) {
-          try {
-            await releaseGloamQueryReceipt(gloamReceiptId);
-          } catch {
-            // Best effort: the receipt remains retryable.
-          }
-        }
+        const stage = aborted ? "inference-stream-timeout" : "inference-stream";
+        logInferenceFailure(stage, error, apiKey);
+        const credentialFailure = getInferenceCredentialFailure(error);
         send(controller, {
           type: "error",
-          code: aborted ? "INFERENCE_TIMEOUT" : "INFERENCE_FAILED",
-          error: aborted
+          code: credentialFailure?.code ?? (aborted ? "INFERENCE_TIMEOUT" : "INFERENCE_FAILED"),
+          error: credentialFailure?.message ?? (aborted
             ? "The answer took too long. Your payment is confirmed; try again in a moment."
-            : "The answer could not be generated. Your payment is confirmed; try again in a moment.",
+            : "The answer could not be generated. Your payment is confirmed; try again in a moment."),
         });
       } finally {
         clearTimeout(timeoutId);
@@ -602,16 +579,11 @@ function streamInference({
         } catch {
           // The stream was already cancelled by the client.
         }
-        if (!completed && settlementType === "VERIFIED_NEAR_TRANSFER" && nearTxHash) {
-          releasePaymentClaim(nearTxHash);
-        }
+        if (!completed) releasePaymentClaim(nearTxHash);
       }
     },
     cancel() {
       streamClosed = true;
-      if (gloamReceiptId) {
-        void releaseGloamQueryReceipt(gloamReceiptId).catch(() => undefined);
-      }
     },
   });
 
@@ -626,8 +598,6 @@ function streamInference({
 }
 
 export async function POST(req: NextRequest) {
-  let claimedGloamReceiptId: string | null = null;
-  let gloamQueryCompleted = false;
   let failureStage = "request";
   try {
     // 1. Safely parse request body (JSON or multipart text-file upload)
@@ -671,8 +641,6 @@ export async function POST(req: NextRequest) {
       fileContent,
       userId,
       agentId,
-      paymentType,
-      payload,
       stream: rawStream,
     } = parsedBody as Record<string, unknown>;
     const wantsStream = rawStream === true || rawStream === "true";
@@ -691,12 +659,9 @@ export async function POST(req: NextRequest) {
       hasDatasetId: typeof datasetId === "string" && datasetId.length > 0,
     });
 
-    // 2. Verify the payment against either the native NEAR rail or the
-    // private Gloam rail. Both paths must complete server-side settlement
-    // before the query is allowed to run.
+    // 2. Verify the native NEAR payment before allowing the query to run.
     const txHash = typeof rawTxHash === "string" ? rawTxHash.trim() : "";
     const payer = typeof payerAccountId === "string" ? payerAccountId.trim() : "";
-    const normalizedPaymentType = (typeof paymentType === "string" ? paymentType : "").toUpperCase();
     const resolvedVault = typeof vaultId === "string" ? getDemoVault(vaultId) : undefined;
     let resolvedPublishedVault: Awaited<ReturnType<typeof getPublishedVault>> = null;
     let resolvedPublishedDataset: string | null = null;
@@ -727,134 +692,80 @@ export async function POST(req: NextRequest) {
     const queryHash = submittedQuery ? normalizeQueryHash(submittedQuery) : "";
     let payment: QueryPayment;
     let receiptId = "";
-    let settlementType: "VERIFIED_NEAR_TRANSFER" | "GLOAM_PRIVATE_PAYMENT" = "VERIFIED_NEAR_TRANSFER";
 
     failureStage = "payment-verification";
-    if (normalizedPaymentType === "GLOAM" || (payload !== undefined && payload !== null)) {
-      if (typeof vaultId !== "string" || !vaultId.trim()) {
-        return errorResponse(400, "A vault ID is required for a private Gloam query.", {
-          code: "MISSING_VAULT_ID",
-          paymentVerified: false,
+    if (!txHash) {
+      return errorResponse(
+        402,
+        "A verified NEAR testnet payment is required before this query can run.",
+        { code: "MISSING_TX_HASH", paymentVerified: false },
+      );
+    }
+    if (!payer) {
+      return errorResponse(
+        402,
+        "The payer NEAR account is required to verify the payment.",
+        { code: "MISSING_PAYER", paymentVerified: false },
+      );
+    }
+
+    if (!expectedPriceNear) {
+      return errorResponse(400, "A query price is required for payment verification.", {
+        code: "MISSING_PRICE",
+      });
+    }
+
+    let minimumYocto: bigint;
+    try {
+      minimumYocto = nearToYocto(expectedPriceNear);
+    } catch {
+      return errorResponse(400, "The query price is not a valid NEAR amount.", {
+        code: "INVALID_PRICE",
+      });
+    }
+
+    const receiver = resolvedPublishedVault?.payoutAddress
+      ?? resolvedVault?.seller
+      ?? getTreasuryAccount();
+    const cachedPayment = getCachedVerifiedPayment(txHash, payer, minimumYocto, receiver);
+    if (cachedPayment) {
+      if (queryHash && cachedPayment.queryHash && cachedPayment.queryHash !== queryHash) {
+        return errorResponse(409, "This payment is already tied to a different question. Ask the original question again.", {
+          code: "PAYMENT_QUERY_MISMATCH",
+          paymentVerified: true,
+          payment: cachedPayment.payment,
         });
       }
-
-      if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
-        return errorResponse(400, "A valid Gloam payload is required before query execution.", {
-          code: "INVALID_GLOAM_PAYLOAD",
-          paymentVerified: false,
-        });
-      }
-
+      payment = cachedPayment.payment;
+    } else {
       try {
-        const settled = await settleGloamQueryPayment({
-          vaultId,
-          payload: payload as Parameters<typeof settleGloamQueryPayment>[0]["payload"],
+        payment = await verifyNearTransfer({
+          txHash,
+          payerAccountId: payer,
+          expectedReceiver: receiver,
+          minimumYocto,
         });
-        const claimed = await claimGloamQueryReceipt(settled.id, vaultId);
-        if (!claimed) {
-          return errorResponse(409, "This private payment is already locked for another query.", {
-            code: "GLOAM_REPLAYED",
+      } catch (verificationError) {
+        if (verificationError instanceof PaymentVerificationError) {
+          logQueryFailure("near-payment-verification", verificationError);
+          return errorResponse(verificationError.status, verificationError.message, {
+            code: verificationError.code,
             paymentVerified: false,
           });
         }
-        claimedGloamReceiptId = settled.id;
-
-        payment = {
-          verified: true,
-          network: String((payload as Record<string, unknown>).network ?? "robinhood"),
-          txHash: settled.txHash,
-          payerAccountId: payer || "private-gloam",
-          receiverId: getGloamReceiveKey().tag,
-          amountNear: "0.0002",
-          amountWei: settled.amountWei,
-          blockHash: null,
-          blockHeight: null,
-          verifiedAt: Date.now(),
-        };
-        receiptId = settled.id;
-        settlementType = "GLOAM_PRIVATE_PAYMENT";
-      } catch (verificationError) {
-        logQueryFailure("gloam-payment-verification", verificationError);
-        const message = verificationError instanceof Error ? verificationError.message : "The private Gloam payment could not be confirmed.";
-        return errorResponse(402, message, {
-          code: "GLOAM_VERIFICATION_FAILED",
-          paymentVerified: false,
-        });
+        throw verificationError;
       }
-    } else {
-      if (!txHash) {
-        return errorResponse(
-          402,
-          "A verified NEAR testnet payment is required before this query can run.",
-          { code: "MISSING_TX_HASH", paymentVerified: false },
-        );
-      }
-      if (!payer) {
-        return errorResponse(
-          402,
-          "The payer NEAR account is required to verify the payment.",
-          { code: "MISSING_PAYER", paymentVerified: false },
-        );
-      }
-
-      if (!expectedPriceNear) {
-        return errorResponse(400, "A query price is required for payment verification.", {
-          code: "MISSING_PRICE",
-        });
-      }
-
-      let minimumYocto: bigint;
-      try {
-        minimumYocto = nearToYocto(expectedPriceNear);
-      } catch {
-        return errorResponse(400, "The query price is not a valid NEAR amount.", {
-          code: "INVALID_PRICE",
-        });
-      }
-
-      const receiver = resolvedPublishedVault?.payoutAddress
-        ?? resolvedVault?.seller
-        ?? getTreasuryAccount();
-      const cachedPayment = getCachedVerifiedPayment(txHash, payer, minimumYocto, receiver);
-      if (cachedPayment) {
-        if (queryHash && cachedPayment.queryHash && cachedPayment.queryHash !== queryHash) {
-          return errorResponse(409, "This payment is already tied to a different question. Ask the original question again.", {
-            code: "PAYMENT_QUERY_MISMATCH",
-            paymentVerified: true,
-            payment: cachedPayment.payment,
-          });
-        }
-        payment = cachedPayment.payment;
-      } else {
-        try {
-          payment = await verifyNearTransfer({
-            txHash,
-            payerAccountId: payer,
-            expectedReceiver: receiver,
-            minimumYocto,
-          });
-        } catch (verificationError) {
-          if (verificationError instanceof PaymentVerificationError) {
-            logQueryFailure("near-payment-verification", verificationError);
-            return errorResponse(verificationError.status, verificationError.message, {
-              code: verificationError.code,
-              paymentVerified: false,
-            });
-          }
-          throw verificationError;
-        }
-        cacheVerifiedPayment(payment, queryHash, receiver);
-      }
-
-      const nearReceiptId = payment.txHash;
-      if (!nearReceiptId) {
-        return errorResponse(402, "The payment record is incomplete. Please retry the query.", {
-          code: "INCOMPLETE_PAYMENT",
-          paymentVerified: false,
-        });
-      }
-      receiptId = nearReceiptId;
+      cacheVerifiedPayment(payment, queryHash, receiver);
     }
+
+    const nearReceiptId = payment.txHash;
+    if (!nearReceiptId) {
+      return errorResponse(402, "The payment record is incomplete. Please retry the query.", {
+        code: "INCOMPLETE_PAYMENT",
+        paymentVerified: false,
+      });
+    }
+    receiptId = nearReceiptId;
 
     // 3. Resolve dataset content only on the server. Sample data comes from
     // the server catalog, and published data comes from private KV storage.
@@ -951,9 +862,13 @@ export async function POST(req: NextRequest) {
 
     // 6. Run the LLM inference against the prepared dataset
     failureStage = "inference-configuration";
-    const apiKey = process.env.NEAR_AI_API_KEY;
+    const apiKey = process.env.NEAR_AI_API_KEY?.trim();
     if (!apiKey) {
-      console.error("[TEE Route] NEAR_AI_API_KEY is not configured.");
+      console.error("[TEE Route] Inference configuration is missing.", {
+        stage: failureStage,
+        code: "MISSING_NEAR_AI_API_KEY",
+        env: "NEAR_AI_API_KEY",
+      });
       return errorResponse(
         503,
         "Inference is not configured on this server. Set NEAR_AI_API_KEY (see README) and retry. Your payment transaction is still valid.",
@@ -969,41 +884,29 @@ export async function POST(req: NextRequest) {
       { role: "user", content: `Dataset context:\n${dataset}\n\nResearch query:\n${submittedQuery}` },
     ];
 
-    if (settlementType === "VERIFIED_NEAR_TRANSFER") {
-      const nearTxHash = payment.txHash;
-      if (!nearTxHash) {
-        return errorResponse(402, "The NEAR payment is incomplete. Please retry the query.", {
-          code: "INCOMPLETE_PAYMENT",
+    const nearTxHash = payment.txHash;
+    try {
+      claimPayment(nearTxHash);
+    } catch (claimError) {
+      if (claimError instanceof PaymentVerificationError) {
+        return errorResponse(claimError.status, claimError.message, {
+          code: claimError.code,
           paymentVerified: true,
           payment,
         });
       }
-
-      try {
-        claimPayment(nearTxHash);
-      } catch (claimError) {
-        if (claimError instanceof PaymentVerificationError) {
-          return errorResponse(claimError.status, claimError.message, {
-            code: claimError.code,
-            paymentVerified: true,
-            payment,
-          });
-        }
-        throw claimError;
-      }
+      throw claimError;
     }
 
     if (wantsStream) {
       const response = streamInference({
         client,
+        apiKey,
         messages,
         receiptId,
-        settlementType,
-        nearTxHash: settlementType === "VERIFIED_NEAR_TRANSFER" ? payment.txHash : undefined,
-        gloamReceiptId: claimedGloamReceiptId,
+        nearTxHash,
         datasetId,
       });
-      claimedGloamReceiptId = null;
       return response;
     }
 
@@ -1048,25 +951,24 @@ export async function POST(req: NextRequest) {
         insight: generatedInsight,
         receiptId,
         payment,
-        settlementType,
       });
-      if (settlementType === "VERIFIED_NEAR_TRANSFER") {
-        const nearTxHash = payment.txHash;
-        if (nearTxHash) markPaymentSettled(nearTxHash);
-      }
-      gloamQueryCompleted = true;
+      markPaymentSettled(nearTxHash);
       return response;
     } catch (err) {
-      if (settlementType === "VERIFIED_NEAR_TRANSFER") {
-        const nearTxHash = payment.txHash;
-        if (nearTxHash) {
-          // The payment was valid but inference failed, so release the claim and
-          // let the buyer retry with the same transfer instead of paying twice.
-          releasePaymentClaim(nearTxHash);
-        }
+      // The payment was valid but inference failed, so release the claim and
+      // let the buyer retry with the same transfer instead of paying twice.
+      releasePaymentClaim(nearTxHash);
+      const credentialFailure = getInferenceCredentialFailure(err);
+      if (credentialFailure) {
+        logInferenceFailure("inference-authentication", err, apiKey);
+        return errorResponse(503, credentialFailure.message, {
+          code: credentialFailure.code,
+          paymentVerified: true,
+          payment,
+        });
       }
       const aborted = inferenceAborted;
-      logQueryFailure(aborted ? "inference-timeout" : "inference", err);
+      logInferenceFailure(aborted ? "inference-timeout" : "inference", err, apiKey);
       console.error("[Query] Inference attempts exhausted:", { attempts: inferenceAttempts });
       return errorResponse(
         aborted ? 504 : 502,
@@ -1088,20 +990,5 @@ export async function POST(req: NextRequest) {
       { success: false, error: "Internal server error while processing the query." },
       { status: 500 },
     );
-  } finally {
-    if (claimedGloamReceiptId) {
-      try {
-        if (gloamQueryCompleted) {
-          await markGloamQueryReceiptConsumed(claimedGloamReceiptId);
-        } else {
-          await releaseGloamQueryReceipt(claimedGloamReceiptId);
-        }
-      } catch (error) {
-        console.error(
-          "[Gloam Receipt] Could not update query receipt state:",
-          error instanceof Error ? error.message : "unknown receipt error",
-        );
-      }
-    }
   }
 }

@@ -6,8 +6,7 @@ const nextConfig: NextConfig = {
   },
   cacheComponents: true,
   partialPrefetching: true,
-  transpilePackages: ["@gloamtrade/sdk"],
-  serverExternalPackages: ["pdf-parse", "snarkjs"],
+  serverExternalPackages: ["pdf-parse"],
   typescript: {
     ignoreBuildErrors: true,
   },
