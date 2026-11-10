@@ -26,7 +26,7 @@ export type PublishedVaultRecord = {
 };
 
 type SupabaseVaultRow = {
-  id: string;
+  id: string | number;
   title: string;
   description: string;
   price: string | number;
@@ -63,14 +63,45 @@ export class PublishedVaultStorageError extends Error {
   }
 }
 
+let loggedKeyAlias = false;
+
+function resolveEncryptionKey() {
+  const primary = process.env.PUBLISHED_VAULT_ENCRYPTION_KEY?.trim();
+  if (primary) return primary.replace(/^0x/i, "");
+  // Earlier deployments stored the key under a misspelled name. Accept it so
+  // publishing works, but flag it in the logs so it can be renamed.
+  const legacy = process.env.PUBLISH_VAUT_ENCRYPTION_KEY?.trim()
+    || process.env.PUBLISH_VAULT_ENCRYPTION_KEY?.trim();
+  if (legacy) {
+    if (!loggedKeyAlias) {
+      loggedKeyAlias = true;
+      console.warn("[Published Vaults] Using a misspelled encryption key variable; rename it to PUBLISHED_VAULT_ENCRYPTION_KEY.");
+    }
+    return legacy.replace(/^0x/i, "");
+  }
+  return "";
+}
+
 function getSupabaseConfig(): SupabaseConfig {
   const rawUrl = process.env.SUPABASE_URL?.trim() ?? "";
   const anonKey = process.env.SUPABASE_ANON_KEY?.trim() ?? "";
-  const encryptionKey = (process.env.PUBLISHED_VAULT_ENCRYPTION_KEY?.trim() ?? "").replace(/^0x/i, "");
+  const encryptionKey = resolveEncryptionKey();
 
-  if (!rawUrl) throw new PublishedVaultStorageError("MISSING_SUPABASE_URL", "configuration");
-  if (!anonKey) throw new PublishedVaultStorageError("MISSING_SUPABASE_ANON_KEY", "configuration");
+  if (!rawUrl || !anonKey) {
+    const code = !rawUrl ? "MISSING_SUPABASE_URL" : "MISSING_SUPABASE_ANON_KEY";
+    console.error("[Published Vaults] Configuration error:", { code });
+    throw new PublishedVaultStorageError(code, "configuration");
+  }
+  if (!encryptionKey) {
+    console.error("[Published Vaults] Configuration error:", { code: "MISSING_PUBLISHED_VAULT_ENCRYPTION_KEY" });
+    throw new PublishedVaultStorageError("MISSING_PUBLISHED_VAULT_ENCRYPTION_KEY", "configuration");
+  }
   if (!/^[a-f0-9]{64}$/i.test(encryptionKey)) {
+    console.error("[Published Vaults] Configuration error:", {
+      code: "INVALID_PUBLISHED_VAULT_ENCRYPTION_KEY",
+      expected: "64 hex characters",
+      length: encryptionKey.length,
+    });
     throw new PublishedVaultStorageError("INVALID_PUBLISHED_VAULT_ENCRYPTION_KEY", "configuration");
   }
 
@@ -132,19 +163,46 @@ async function supabaseFetch(url: string, init: RequestInit, stage: string): Pro
   throw new PublishedVaultStorageError("SUPABASE_REQUEST_FAILED", stage);
 }
 
+function describeSupabaseError(value: unknown) {
+  if (typeof value !== "object" || value === null) return {};
+  const body = value as Record<string, unknown>;
+  const pick = (key: string) => typeof body[key] === "string" || typeof body[key] === "number"
+    ? String(body[key]).slice(0, 300)
+    : undefined;
+  // PostgREST returns { code, message, details, hint }; Storage returns
+  // { statusCode, error, message }. Neither echoes request credentials.
+  return {
+    supabaseCode: pick("code") ?? pick("statusCode"),
+    supabaseError: pick("error"),
+    supabaseMessage: pick("message"),
+    supabaseHint: pick("hint"),
+  };
+}
+
 async function supabaseJson<T>(response: Response, stage: string): Promise<T> {
+  const text = await response.text().catch(() => "");
   let value: unknown;
   try {
-    value = await response.json();
+    value = text ? JSON.parse(text) : null;
   } catch {
     const code = response.ok ? "SUPABASE_INVALID_RESPONSE" : getStatusCode(response.status);
-    console.error("[Published Vaults] Supabase request failed:", { stage, code, status: response.status });
+    console.error("[Published Vaults] Supabase request failed:", {
+      stage,
+      code,
+      status: response.status,
+      body: response.ok ? undefined : text.slice(0, 200),
+    });
     throw new PublishedVaultStorageError(code, stage, response.status);
   }
 
   if (!response.ok) {
     const code = getStatusCode(response.status);
-    console.error("[Published Vaults] Supabase request failed:", { stage, code, status: response.status });
+    console.error("[Published Vaults] Supabase request failed:", {
+      stage,
+      code,
+      status: response.status,
+      ...describeSupabaseError(value),
+    });
     throw new PublishedVaultStorageError(code, stage, response.status);
   }
   return value as T;
@@ -159,21 +217,27 @@ function storageObjectUrl(config: SupabaseConfig, fileReference: string) {
   return `${config.url}/storage/v1/object/${STORAGE_BUCKET}/${path}`;
 }
 
-function isUuid(value: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+function isVaultId(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+    || /^[1-9][0-9]{0,18}$/.test(value);
+}
+
+function isFileReference(value: string) {
+  return /^[0-9a-f-]{36}\.json$/i.test(value);
 }
 
 function mapSupabaseVault(value: unknown): PublishedVaultRecord | null {
   if (typeof value !== "object" || value === null) return null;
   const row = value as Partial<SupabaseVaultRow>;
-  if (typeof row.id !== "string" || !isUuid(row.id)
+  const id = typeof row.id === "number" || typeof row.id === "string" ? String(row.id) : "";
+  if (!isVaultId(id)
     || typeof row.title !== "string"
     || typeof row.description !== "string"
     || (typeof row.price !== "string" && typeof row.price !== "number")
     || typeof row.publisher_address !== "string"
     || typeof row.payout_address !== "string"
     || typeof row.file_reference !== "string"
-    || row.file_reference !== `${row.id}.json`
+    || !isFileReference(row.file_reference)
     || typeof row.created_at !== "string"
     || !isValidNearAccountId(row.publisher_address)
     || !isValidNearAccountId(row.payout_address)) return null;
@@ -188,7 +252,7 @@ function mapSupabaseVault(value: unknown): PublishedVaultRecord | null {
   }
 
   return {
-    id: row.id,
+    id,
     title: row.title,
     description: row.description,
     priceNear,
@@ -264,14 +328,21 @@ export async function listPublishedVaults(): Promise<MarketplaceVault[]> {
     console.error("[Published Vaults] Supabase returned an invalid vault list.", { stage: "vault-list" });
     throw new PublishedVaultStorageError("SUPABASE_INVALID_RESPONSE", "vault-list");
   }
-  return rows
+  const records = rows
     .map(mapSupabaseVault)
-    .filter((record): record is PublishedVaultRecord => record !== null)
-    .map(toPublishedVaultListing);
+    .filter((record): record is PublishedVaultRecord => record !== null);
+  if (records.length !== rows.length) {
+    console.warn("[Published Vaults] Skipped invalid vault rows:", {
+      stage: "vault-list",
+      total: rows.length,
+      skipped: rows.length - records.length,
+    });
+  }
+  return records.map(toPublishedVaultListing);
 }
 
 export async function getPublishedVault(id: string): Promise<PublishedVaultRecord | null> {
-  if (!isUuid(id)) return null;
+  if (!isVaultId(id)) return null;
   const config = getSupabaseConfig();
   const query = new URLSearchParams({
     select: VAULT_COLUMNS,
@@ -286,7 +357,11 @@ export async function getPublishedVault(id: string): Promise<PublishedVaultRecor
     console.error("[Published Vaults] Supabase returned an invalid vault record.", { stage: "vault-lookup" });
     throw new PublishedVaultStorageError("SUPABASE_INVALID_RESPONSE", "vault-lookup");
   }
-  return mapSupabaseVault(rows[0]);
+  const record = mapSupabaseVault(rows[0]);
+  if (rows.length && !record) {
+    console.warn("[Published Vaults] Stored vault row is invalid.", { stage: "vault-lookup" });
+  }
+  return record;
 }
 
 export async function getPublishedVaultDataset(record: PublishedVaultRecord): Promise<string | null> {
@@ -332,12 +407,24 @@ async function uploadEncryptedDataset(
   }
 }
 
+async function findPublishedVaultByFile(config: SupabaseConfig, fileReference: string) {
+  const query = new URLSearchParams({
+    select: VAULT_COLUMNS,
+    file_reference: `eq.${fileReference}`,
+    limit: "1",
+  });
+  const response = await supabaseFetch(databaseUrl(config, query), {
+    headers: supabaseHeaders(config),
+  }, "vault-insert-recovery");
+  const rows = await supabaseJson<unknown>(response, "vault-insert-recovery");
+  return Array.isArray(rows) ? mapSupabaseVault(rows[0]) : null;
+}
+
 function matchesPublishedInput(
   record: PublishedVaultRecord | null,
-  input: { id: string; title: string; description: string; priceNear: string; publisherAddress: string; payoutAddress: string; fileReference: string },
+  input: { title: string; description: string; priceNear: string; publisherAddress: string; payoutAddress: string; fileReference: string },
 ) {
   return record !== null
-    && record.id === input.id
     && record.title === input.title
     && record.description === input.description
     && record.priceNear === input.priceNear
@@ -373,14 +460,18 @@ export async function createPublishedVault(input: {
 
   const prepared = prepareDataset(dataset);
   const config = getSupabaseConfig();
-  const id = randomUUID();
-  const fileReference = `${id}.json`;
+  const fileReference = `${randomUUID()}.json`;
+  console.info("[Published Vaults] Publishing vault:", {
+    stage: "dataset-upload",
+    bytes: Buffer.byteLength(dataset, "utf8"),
+  });
   await uploadEncryptedDataset(config, fileReference, dataset);
+  console.info("[Published Vaults] Dataset uploaded; inserting metadata.", { stage: "vault-insert" });
 
   const query = new URLSearchParams({
     select: VAULT_COLUMNS,
   });
-  const recordInput = { id, title, description, priceNear, publisherAddress, payoutAddress, fileReference };
+  const recordInput = { title, description, priceNear, publisherAddress, payoutAddress, fileReference };
   try {
     const metadataResponse = await supabaseFetch(databaseUrl(config, query), {
       method: "POST",
@@ -389,7 +480,6 @@ export async function createPublishedVault(input: {
         Prefer: "return=representation",
       }),
       body: JSON.stringify({
-        id,
         title,
         description,
         price: priceNear,
@@ -400,10 +490,18 @@ export async function createPublishedVault(input: {
     }, "vault-insert");
     const rows = await supabaseJson<unknown>(metadataResponse, "vault-insert");
     const record = Array.isArray(rows) ? mapSupabaseVault(rows[0]) : null;
-    if (!record) throw new PublishedVaultStorageError("SUPABASE_INVALID_RESPONSE", "vault-insert");
+    if (!record) {
+      console.error("[Published Vaults] Inserted row could not be read back.", {
+        stage: "vault-insert",
+        code: "SUPABASE_INVALID_RESPONSE",
+        returnedRows: Array.isArray(rows) ? rows.length : null,
+      });
+      throw new PublishedVaultStorageError("SUPABASE_INVALID_RESPONSE", "vault-insert");
+    }
+    console.info("[Published Vaults] Vault published.", { stage: "vault-insert", id: record.id });
     return toPublishedVaultListing({ ...record, rowCount: prepared.rowCount });
   } catch (error) {
-    const existing = await getPublishedVault(id).catch(() => null);
+    const existing = await findPublishedVaultByFile(config, fileReference).catch(() => null);
     if (existing && matchesPublishedInput(existing, recordInput)) {
       return toPublishedVaultListing({ ...existing, rowCount: prepared.rowCount });
     }

@@ -21,7 +21,10 @@ export async function GET() {
         : error instanceof Error ? { name: error.name, message: error.message } : "unknown storage error",
     );
     return NextResponse.json(
-      { error: "Published vaults are temporarily unavailable." },
+      {
+        error: "Published vaults are temporarily unavailable.",
+        ...(error instanceof PublishedVaultStorageError ? { stage: error.stage, code: error.code } : {}),
+      },
       { status: 503, headers: PRIVATE_HEADERS },
     );
   }
@@ -70,7 +73,10 @@ export async function POST(request: Request) {
         : `Publishing is temporarily unavailable (${error.stage}: ${error.code}).`
       : message;
     return NextResponse.json(
-      { error: userMessage },
+      {
+        error: userMessage,
+        ...(storageError ? { stage: error.stage, code: error.code } : {}),
+      },
       { status, headers: PRIVATE_HEADERS },
     );
   }

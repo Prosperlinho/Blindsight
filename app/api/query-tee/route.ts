@@ -21,11 +21,17 @@ import {
 
 export const maxDuration = 60;
 
-const MODEL = "z-ai/glm-5.3";
+// z-ai/glm-5.3 is a reasoning model: on real datasets it spends the entire
+// max_tokens budget on hidden reasoning and returns an empty answer. DeepSeek
+// V3.2 is hosted by NEAR AI, does not reason, and answers within ~15s.
+const MODEL = "deepseek/deepseek-v3.2";
 const MAX_DATASET_LENGTH = 32_000;
 const MAX_QUERY_LENGTH = 2_000;
 const DATASET_TRUNCATION_NOTE = "[Dataset truncated to fit the inference context]";
-const INFERENCE_TIMEOUT_MS = 24_000;
+const INFERENCE_TIMEOUT_MS = 30_000;
+// Leave headroom under maxDuration (60s) for payment verification and the response.
+const INFERENCE_DEADLINE_MS = 52_000;
+const MIN_RETRY_BUDGET_MS = 12_000;
 const MAX_INFERENCE_ATTEMPTS = 2;
 const INFERENCE_MAX_TOKENS = 450;
 const NEAR_AI_BASE_URL = "https://cloud-api.near.ai/v1";
@@ -598,6 +604,7 @@ function streamInference({
 }
 
 export async function POST(req: NextRequest) {
+  const requestStartedAt = Date.now();
   let failureStage = "request";
   try {
     // 1. Safely parse request body (JSON or multipart text-file upload)
@@ -669,8 +676,10 @@ export async function POST(req: NextRequest) {
       try {
         resolvedPublishedVault = await getPublishedVault(vaultId);
         if (!resolvedPublishedVault) {
+          console.warn("[Query] Published vault not found.", { stage: "published-vault" });
           return errorResponse(404, "This vault is no longer available.", { code: "VAULT_NOT_FOUND" });
         }
+        console.info("[Query] Published vault resolved; loading dataset.", { stage: "published-dataset" });
         resolvedPublishedDataset = await getPublishedVaultDataset(resolvedPublishedVault);
         if (!resolvedPublishedDataset) {
           console.error("[Query] Published dataset could not be loaded:", {
@@ -738,6 +747,7 @@ export async function POST(req: NextRequest) {
       }
       payment = cachedPayment.payment;
     } else {
+      const verificationStartedAt = Date.now();
       try {
         payment = await verifyNearTransfer({
           txHash,
@@ -756,6 +766,10 @@ export async function POST(req: NextRequest) {
         throw verificationError;
       }
       cacheVerifiedPayment(payment, queryHash, receiver);
+      console.info("[Query] Payment verified.", {
+        stage: "near-payment-verification",
+        ms: Date.now() - verificationStartedAt,
+      });
     }
 
     const nearReceiptId = payment.txHash;
@@ -842,6 +856,7 @@ export async function POST(req: NextRequest) {
     failureStage = "query-guardrails";
     const historyCheck = checkQueryHistoryLimit(prepared, submittedQuery, activeUserId, receiptId);
     if (historyCheck.blocked) {
+      console.warn("[Query] Blocked by query history limit.", { stage: failureStage });
       return NextResponse.json(
         { success: false, error: historyCheck.message, antiProbingCheck: "BLOCKED", noiseAdded: false },
         { status: 429 },
@@ -849,6 +864,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (isQueryPatternFlagged(req, prepared, submittedQuery, receiptId)) {
+      console.warn("[Query] Blocked by query pattern guard.", { stage: failureStage });
       return NextResponse.json(
         {
           success: false,
@@ -889,6 +905,7 @@ export async function POST(req: NextRequest) {
       claimPayment(nearTxHash);
     } catch (claimError) {
       if (claimError instanceof PaymentVerificationError) {
+        console.warn("[Query] Payment claim rejected:", { stage: "payment-claim", code: claimError.code });
         return errorResponse(claimError.status, claimError.message, {
           code: claimError.code,
           paymentVerified: true,
@@ -918,28 +935,54 @@ export async function POST(req: NextRequest) {
 
       for (let attempt = 0; attempt < MAX_INFERENCE_ATTEMPTS; attempt += 1) {
         inferenceAttempts = attempt + 1;
+        const remainingMs = INFERENCE_DEADLINE_MS - (Date.now() - requestStartedAt);
+        const attemptTimeoutMs = Math.min(INFERENCE_TIMEOUT_MS, remainingMs);
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), INFERENCE_TIMEOUT_MS);
+        const timeoutId = setTimeout(() => controller.abort(), attemptTimeoutMs);
+        const attemptStartedAt = Date.now();
+        console.info("[Query] Inference attempt started:", {
+          attempt: inferenceAttempts,
+          model: MODEL,
+          timeoutMs: attemptTimeoutMs,
+          promptChars: dataset.length + submittedQuery.length,
+        });
         try {
           const completion = await client.chat.completions.create({
             model: MODEL,
             messages,
             max_tokens: INFERENCE_MAX_TOKENS,
+            temperature: 0.2,
           }, { signal: controller.signal, maxRetries: 0 });
 
-          generatedInsight = completion.choices[0]?.message?.content?.trim() ?? "";
-          if (!generatedInsight) throw new Error("The inference gateway returned no insight.");
+          const choice = completion.choices[0];
+          generatedInsight = choice?.message?.content?.trim() ?? "";
+          console.info("[Query] Inference attempt finished:", {
+            attempt: inferenceAttempts,
+            ms: Date.now() - attemptStartedAt,
+            finishReason: choice?.finish_reason,
+            answerChars: generatedInsight.length,
+            completionTokens: completion.usage?.completion_tokens,
+          });
+          if (!generatedInsight) {
+            throw new Error(`The inference gateway returned no insight (finish_reason: ${choice?.finish_reason ?? "unknown"}).`);
+          }
           break;
         } catch (error) {
           inferenceAborted ||= controller.signal.aborted;
-          if (attempt === MAX_INFERENCE_ATTEMPTS - 1 || !isRetryableInferenceError(error)) {
+          const budgetLeft = INFERENCE_DEADLINE_MS - (Date.now() - requestStartedAt);
+          if (
+            attempt === MAX_INFERENCE_ATTEMPTS - 1
+            || !isRetryableInferenceError(error)
+            || budgetLeft < MIN_RETRY_BUDGET_MS
+          ) {
             throw error;
           }
           console.warn("[Query] Transient inference failure; retrying:", {
             attempt: inferenceAttempts,
+            ms: Date.now() - attemptStartedAt,
             timeout: controller.signal.aborted,
-            status: typeof error === "object" && error !== null && "status" in error
-              && typeof error.status === "number" ? error.status : undefined,
+            budgetLeftMs: budgetLeft,
+            status: getInferenceStatus(error),
           });
         } finally {
           clearTimeout(timeoutId);
@@ -969,7 +1012,11 @@ export async function POST(req: NextRequest) {
       }
       const aborted = inferenceAborted;
       logInferenceFailure(aborted ? "inference-timeout" : "inference", err, apiKey);
-      console.error("[Query] Inference attempts exhausted:", { attempts: inferenceAttempts });
+      console.error("[Query] Inference attempts exhausted:", {
+        attempts: inferenceAttempts,
+        model: MODEL,
+        totalMs: Date.now() - requestStartedAt,
+      });
       return errorResponse(
         aborted ? 504 : 502,
         aborted

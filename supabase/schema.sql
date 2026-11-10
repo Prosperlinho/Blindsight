@@ -11,6 +11,13 @@ create table if not exists public.vaults (
   created_at timestamptz not null default now()
 );
 
+-- Bring a table created by hand up to date. Safe to re-run.
+alter table public.vaults add column if not exists description text not null default '';
+alter table public.vaults add column if not exists payout_address text;
+update public.vaults set payout_address = publisher_address where payout_address is null;
+alter table public.vaults alter column payout_address set not null;
+alter table public.vaults add column if not exists created_at timestamptz not null default now();
+
 create index if not exists vaults_created_at_idx on public.vaults (created_at desc);
 
 alter table public.vaults enable row level security;
@@ -35,3 +42,6 @@ create policy "BlindSight encrypted datasets are readable"
 drop policy if exists "BlindSight encrypted datasets can be uploaded" on storage.objects;
 create policy "BlindSight encrypted datasets can be uploaded"
   on storage.objects for insert to anon with check (bucket_id = 'vault-datasets');
+
+-- Make PostgREST pick up new columns immediately.
+notify pgrst, 'reload schema';
