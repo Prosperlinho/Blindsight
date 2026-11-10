@@ -32,7 +32,7 @@ verify the payment and the answer independently.
 | Dataset lifecycle | **Prototype enclave (mimicked)** | The route drops its prepared dataset reference after inference. JavaScript cannot guarantee heap zeroing, and this is not hardware isolation. |
 | TEE / enclave attestation | **Mimicked** | No hardware attestation exists and the UI does not display a fake attestation token. The interface labels the enclave as a server-side prototype. |
 | Publisher payout | **Real for published vaults** | A published vault's full query fee is verified against and transferred to its configured payout account. Sample-vault fees go to the BlindSight treasury. |
-| Shared vault storage | **Pinata IPFS** | Published metadata is pinned as public JSON and discovered through the shared Pinata account. Dataset content is encrypted before pinning; listing responses contain metadata only. |
+| Shared vault storage | **Supabase** | Published metadata is stored in the shared `vaults` table. Encrypted datasets are stored in the private `vault-datasets` bucket; listing responses contain metadata only. |
 | Anti-probing checks | **Best effort** | In-memory query history and pattern checks per server instance. Not a guarantee against dataset reconstruction. |
 | Replay protection | **Best effort** | In-memory, per-instance map with a 24-hour TTL. It is not a network-wide nonce. |
 
@@ -140,8 +140,8 @@ Verification plus inference typically takes 5–30 seconds. The wallet also char
 fee. If inference times out, the confirmed payment remains retryable without paying twice.
 
 The **Vault Explorer** lets you switch between the samples and published vaults. The **Publish Vault**
-tab pins metadata and encrypted dataset content to IPFS, so listings are shared through the Pinata
-account and persist across deployments. Query fees for published vaults go to their configured payout account; sample
+tab stores metadata and encrypted dataset content in Supabase, so listings are shared across users
+and persist across deployments. Query fees for published vaults go to their configured payout account; sample
 vault fees continue to go to the treasury.
 
 ### If the page looks stale
@@ -184,26 +184,26 @@ cp .env.example .env.local
 | `NEXT_PUBLIC_BLINDSIGHT_TREASURY_ACCOUNT` | Recommended | Public treasury address shown to the browser. Defaults to `blindsight-ceeaa6612a.testnet`. |
 | `BLINDSIGHT_TREASURY_ACCOUNT` | Optional | Server-side override for the same treasury. |
 | `NEXT_PUBLIC_NEAR_NETWORK` | Optional | `testnet` (the only supported value). |
-| `PINATA_API_KEY` | Required for published vaults | Pinata server-side API key. |
-| `PINATA_SECRET_API_KEY` | Required for published vaults | Pinata server-side secret. Never expose it with a `NEXT_PUBLIC_` prefix. |
+| `SUPABASE_URL` | Required for published vaults | Supabase project URL. |
+| `SUPABASE_ANON_KEY` | Required for published vaults | Supabase anon key used for server-side REST calls. |
 | `PUBLISHED_VAULT_ENCRYPTION_KEY` | Required for published vaults | Stable 32-byte hex key for AES-256-GCM dataset encryption. Back it up; rotating it makes existing uploads unreadable. |
-| `PINATA_GATEWAY_URL` | Optional | Custom IPFS gateway base URL. Defaults to `https://gateway.pinata.cloud`. |
 
 If you point the treasury at a different account, it must exist on testnet and the buyer must be able
 to transfer to it. Verification only needs the public account address.
 
-To enable shared publishing on Vercel, create Pinata API credentials and set `PINATA_API_KEY`,
-`PINATA_SECRET_API_KEY`, and `PUBLISHED_VAULT_ENCRYPTION_KEY` in the deployment's server-side
-environment. Generate the encryption key with:
+To enable shared publishing, run [`supabase/schema.sql`](supabase/schema.sql) in the Supabase SQL
+Editor, then set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `PUBLISHED_VAULT_ENCRYPTION_KEY` in the
+deployment environment. The SQL creates the `vaults` table and a private `vault-datasets` bucket.
+Its anon-role policies allow public listing, publishing, and access to encrypted dataset objects;
+do not store unencrypted datasets in that bucket. Generate the encryption key with:
 
 ```bash
 node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 ```
 
-Keep the encryption key stable and back it up. Metadata is pinned as JSON, and the Pinata account's
-app-tagged metadata pins provide the shared discovery index. Dataset bytes are encrypted before
-they are pinned separately. Without these values, sample vaults continue to work, while shared
-listing and publishing are unavailable.
+Keep the encryption key stable and back it up. Supabase stores metadata in `public.vaults` and each
+encrypted dataset separately, referenced by `file_reference`. Without these values, sample vaults
+continue to work, while shared listing and publishing are unavailable.
 
 Without `NEAR_AI_API_KEY`, the app still boots and payments still verify, but a paid query returns
 `INFERENCE_NOT_CONFIGURED`. The confirmed payment stays retryable after you add the key.
@@ -234,7 +234,7 @@ app/
   api/
     verify-payment/route.ts    Explicit "payment confirmed" endpoint
     query-tee/route.ts         Re-verify payment, resolve dataset, run inference
-    vaults/route.ts            Shared IPFS marketplace listing and publishing
+    vaults/route.ts            Shared Supabase marketplace listing and publishing
     vault/parse/route.ts       Real text/PDF extraction (rejects unreadable files)
 components/
   QueryVault.tsx               Paid query console and stage machine
@@ -249,7 +249,7 @@ lib/
   nearWallet.ts                Wallet Selector setup and disconnect
   demoVaults.ts                Client-safe sample vault metadata
   demoVaultDatasets.ts         Server-only synthetic datasets
-  publishedVaults.ts           Pinata metadata discovery and encrypted IPFS datasets
+  publishedVaults.ts           Supabase metadata and encrypted dataset storage
   datasetQuality.ts            Dataset preparation and in-memory cache
   auditLog.ts                  Client audit-log entry type
 scripts/
@@ -300,7 +300,7 @@ Failures return `{ success: false, verified: false, error, code }` with a 4xx st
 ```
 
 The server re-verifies the transfer, resolves sample data from the server catalog or published data
-from IPFS, and then calls inference. Published dataset text is never included in the listing
+from Supabase Storage, and then calls inference. Published dataset text is never included in the listing
 response or sent back to the buyer.
 
 A successful response includes `insight`, `receiptId` (the verified transaction hash), `payment`,
@@ -338,8 +338,8 @@ This is a hackathon prototype, not a production confidential-computing service.
   instance restarts.
 - **Anti-probing is heuristic.** It raises the cost of extraction; it does not make a dataset
   impossible to reconstruct.
-- **Published files are encrypted on IPFS.** Metadata is public; dataset bytes are encrypted before
-  pinning and decrypted server-side for paid inference. The app sends the dataset to NEAR AI after a
-  paid query; use synthetic or non-sensitive data.
+- **Published files are encrypted in Supabase Storage.** Metadata is public; dataset bytes are
+  encrypted before upload and decrypted server-side for paid inference. The app sends the dataset
+  to NEAR AI after a paid query; use synthetic or non-sensitive data.
 
 Do not use real personal, medical, financial, or confidential data with this prototype.

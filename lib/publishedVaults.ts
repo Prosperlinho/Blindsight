@@ -1,19 +1,17 @@
 import "server-only";
 
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from "node:crypto";
 import { prepareDataset } from "@/lib/datasetQuality";
 import { isValidNearAccountId } from "@/lib/nearAccount";
 import { nearToYocto } from "@/lib/paymentConfig";
 import type { MarketplaceVault } from "@/lib/demoVaults";
 
-const PINATA_API_URL = "https://api.pinata.cloud";
-const METADATA_PIN_NAME = "blindsight-vault-metadata";
-const PIN_PAGE_SIZE = 100;
+const STORAGE_BUCKET = "vault-datasets";
 const MAX_LISTED_VAULTS = 100;
 const MAX_DATASET_BYTES = 500_000;
-const PINATA_TIMEOUT_MS = 8_000;
-const GATEWAY_TIMEOUT_MS = 6_000;
+const SUPABASE_TIMEOUT_MS = 8_000;
 const MAX_FETCH_ATTEMPTS = 3;
+const VAULT_COLUMNS = "id,title,description,price,publisher_address,payout_address,file_reference,created_at";
 
 export type PublishedVaultRecord = {
   id: string;
@@ -27,20 +25,28 @@ export type PublishedVaultRecord = {
   rowCount: number;
 };
 
-type StoredVaultMetadata = Omit<PublishedVaultRecord, "id">;
-
-type PinataPin = {
-  ipfs_pin_hash: string;
-  metadata?: { name?: string; keyvalues?: Record<string, string> };
+type SupabaseVaultRow = {
+  id: string;
+  title: string;
+  description: string;
+  price: string | number;
+  publisher_address: string;
+  payout_address: string;
+  file_reference: string;
+  created_at: string;
 };
-
-type PinataPinList = { rows?: PinataPin[]; count?: number };
 
 type EncryptedDataset = {
   version: 1;
   iv: string;
   tag: string;
   ciphertext: string;
+};
+
+type SupabaseConfig = {
+  url: string;
+  anonKey: string;
+  encryptionKey: Buffer;
 };
 
 export class PublishedVaultStorageError extends Error {
@@ -57,150 +63,141 @@ export class PublishedVaultStorageError extends Error {
   }
 }
 
-function getPinataConfig() {
-  const apiKey = process.env.PINATA_API_KEY?.trim() ?? "";
-  const secretApiKey = process.env.PINATA_SECRET_API_KEY?.trim() ?? "";
+function getSupabaseConfig(): SupabaseConfig {
+  const rawUrl = process.env.SUPABASE_URL?.trim() ?? "";
+  const anonKey = process.env.SUPABASE_ANON_KEY?.trim() ?? "";
   const encryptionKey = (process.env.PUBLISHED_VAULT_ENCRYPTION_KEY?.trim() ?? "").replace(/^0x/i, "");
 
-  if (!apiKey) throw new PublishedVaultStorageError("MISSING_PINATA_API_KEY", "configuration");
-  if (!secretApiKey) throw new PublishedVaultStorageError("MISSING_PINATA_SECRET_API_KEY", "configuration");
+  if (!rawUrl) throw new PublishedVaultStorageError("MISSING_SUPABASE_URL", "configuration");
+  if (!anonKey) throw new PublishedVaultStorageError("MISSING_SUPABASE_ANON_KEY", "configuration");
   if (!/^[a-f0-9]{64}$/i.test(encryptionKey)) {
     throw new PublishedVaultStorageError("INVALID_PUBLISHED_VAULT_ENCRYPTION_KEY", "configuration");
   }
+
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new PublishedVaultStorageError("INVALID_SUPABASE_URL", "configuration");
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new PublishedVaultStorageError("INVALID_SUPABASE_URL", "configuration");
+  }
+
   return {
-    apiKey,
-    secretApiKey,
+    url: rawUrl.replace(/\/+$/, ""),
+    anonKey,
     encryptionKey: Buffer.from(encryptionKey, "hex"),
   };
 }
 
-async function pinataFetch(url: string, init: RequestInit, stage: string): Promise<Response> {
+function supabaseHeaders(config: SupabaseConfig, extra: Record<string, string> = {}) {
+  return {
+    apikey: config.anonKey,
+    Authorization: `Bearer ${config.anonKey}`,
+    ...extra,
+  };
+}
+
+function getStatusCode(status: number) {
+  if (status === 401 || status === 403) return "SUPABASE_AUTH_FAILED";
+  if (status === 404) return "SUPABASE_RESOURCE_NOT_FOUND";
+  if (status === 429) return "SUPABASE_RATE_LIMITED";
+  return "SUPABASE_REQUEST_FAILED";
+}
+
+async function supabaseFetch(url: string, init: RequestInit, stage: string): Promise<Response> {
   for (let attempt = 0; attempt < MAX_FETCH_ATTEMPTS; attempt += 1) {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), PINATA_TIMEOUT_MS);
+    const timeoutId = setTimeout(() => controller.abort(), SUPABASE_TIMEOUT_MS);
     try {
-      const response = await fetch(url, { ...init, signal: controller.signal });
-      if (response.status < 500 && response.status !== 429) return response;
-      if (attempt === MAX_FETCH_ATTEMPTS - 1) return response;
+      const response = await fetch(url, { ...init, cache: "no-store", signal: controller.signal });
+      if ((response.status < 500 && response.status !== 429) || attempt === MAX_FETCH_ATTEMPTS - 1) {
+        return response;
+      }
       await response.body?.cancel();
     } catch (error) {
       if (attempt === MAX_FETCH_ATTEMPTS - 1) {
-        const code = error instanceof Error && error.name === "AbortError" ? "PINATA_TIMEOUT" : "PINATA_NETWORK_ERROR";
-        console.error("[Published Vaults] Pinata request failed:", { stage, code });
+        const code = error instanceof Error && error.name === "AbortError"
+          ? "SUPABASE_TIMEOUT"
+          : "SUPABASE_NETWORK_ERROR";
+        console.error("[Published Vaults] Supabase request failed:", { stage, code });
         throw new PublishedVaultStorageError(code, stage);
       }
     } finally {
       clearTimeout(timeoutId);
     }
-    await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+    await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)));
   }
-  throw new PublishedVaultStorageError("PINATA_REQUEST_FAILED", stage);
+  throw new PublishedVaultStorageError("SUPABASE_REQUEST_FAILED", stage);
 }
 
-function pinataHeaders(apiKey: string, secretApiKey: string) {
-  return {
-    pinata_api_key: apiKey,
-    pinata_secret_api_key: secretApiKey,
-  };
-}
-
-async function pinataJson<T>(response: Response, stage: string): Promise<T> {
+async function supabaseJson<T>(response: Response, stage: string): Promise<T> {
   let value: unknown;
   try {
     value = await response.json();
   } catch {
-    const code = response.status === 401 || response.status === 403 ? "PINATA_AUTH_FAILED" : "PINATA_INVALID_RESPONSE";
-    console.error("[Published Vaults] Pinata request failed:", { stage, code, status: response.status });
+    const code = response.ok ? "SUPABASE_INVALID_RESPONSE" : getStatusCode(response.status);
+    console.error("[Published Vaults] Supabase request failed:", { stage, code, status: response.status });
     throw new PublishedVaultStorageError(code, stage, response.status);
   }
-  if (!response.ok || typeof value !== "object" || value === null || "error" in value) {
-    const code = response.status === 401 || response.status === 403
-      ? "PINATA_AUTH_FAILED"
-      : response.status === 429
-        ? "PINATA_RATE_LIMITED"
-        : "PINATA_REQUEST_FAILED";
-    console.error("[Published Vaults] Pinata request failed:", { stage, code, status: response.status });
+
+  if (!response.ok) {
+    const code = getStatusCode(response.status);
+    console.error("[Published Vaults] Supabase request failed:", { stage, code, status: response.status });
     throw new PublishedVaultStorageError(code, stage, response.status);
   }
   return value as T;
 }
 
-function isCid(value: string): boolean {
-  return /^[A-Za-z0-9]{32,120}$/.test(value);
+function databaseUrl(config: SupabaseConfig, query: URLSearchParams) {
+  return `${config.url}/rest/v1/vaults?${query.toString()}`;
 }
 
-function isStoredVaultMetadata(value: unknown): value is StoredVaultMetadata {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as Partial<StoredVaultMetadata>;
-  if (typeof record.title !== "string"
-    || typeof record.description !== "string"
-    || typeof record.priceNear !== "string"
-    || typeof record.publisherAddress !== "string"
-    || typeof record.payoutAddress !== "string"
-    || typeof record.fileRef !== "string"
-    || typeof record.createdAt !== "number"
-    || typeof record.rowCount !== "number"
-    || !isCid(record.fileRef)
-    || !isValidNearAccountId(record.publisherAddress)
-    || !isValidNearAccountId(record.payoutAddress)) return false;
+function storageObjectUrl(config: SupabaseConfig, fileReference: string) {
+  const path = fileReference.split("/").map(encodeURIComponent).join("/");
+  return `${config.url}/storage/v1/object/${STORAGE_BUCKET}/${path}`;
+}
 
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function mapSupabaseVault(value: unknown): PublishedVaultRecord | null {
+  if (typeof value !== "object" || value === null) return null;
+  const row = value as Partial<SupabaseVaultRow>;
+  if (typeof row.id !== "string" || !isUuid(row.id)
+    || typeof row.title !== "string"
+    || typeof row.description !== "string"
+    || (typeof row.price !== "string" && typeof row.price !== "number")
+    || typeof row.publisher_address !== "string"
+    || typeof row.payout_address !== "string"
+    || typeof row.file_reference !== "string"
+    || row.file_reference !== `${row.id}.json`
+    || typeof row.created_at !== "string"
+    || !isValidNearAccountId(row.publisher_address)
+    || !isValidNearAccountId(row.payout_address)) return null;
+
+  const priceNear = String(row.price);
+  const createdAt = Date.parse(row.created_at);
+  if (!Number.isFinite(createdAt)) return null;
   try {
-    nearToYocto(record.priceNear);
-    return true;
+    nearToYocto(priceNear);
   } catch {
-    return false;
+    return null;
   }
-}
 
-function getGatewayUrl(cid: string) {
-  const configured = process.env.PINATA_GATEWAY_URL?.trim().replace(/\/+$/, "");
-  const gateway = configured || "https://gateway.pinata.cloud";
-  return `${gateway.endsWith("/ipfs") ? gateway : `${gateway}/ipfs`}/${encodeURIComponent(cid)}`;
-}
-
-async function fetchIpfsJson<T>(cid: string): Promise<T | null> {
-  for (let attempt = 0; attempt < MAX_FETCH_ATTEMPTS; attempt += 1) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), GATEWAY_TIMEOUT_MS);
-    try {
-      const response = await fetch(getGatewayUrl(cid), {
-        cache: "no-store",
-        signal: controller.signal,
-      });
-      if (response.status === 404) {
-        if (attempt === MAX_FETCH_ATTEMPTS - 1) {
-          console.error("[Published Vaults] IPFS gateway content was not found.", {
-            stage: "ipfs-gateway",
-            code: "IPFS_CONTENT_NOT_FOUND",
-          });
-          return null;
-        }
-      } else if (!response.ok) {
-        if ((response.status < 500 && response.status !== 429) || attempt === MAX_FETCH_ATTEMPTS - 1) {
-          console.error("[Published Vaults] IPFS gateway request failed:", { stage: "ipfs-gateway", status: response.status });
-          throw new PublishedVaultStorageError("IPFS_GATEWAY_REQUEST_FAILED", "ipfs-gateway", response.status);
-        }
-      } else {
-        try {
-          return await response.json() as T;
-        } catch {
-          console.error("[Published Vaults] IPFS gateway returned invalid JSON.", { stage: "ipfs-gateway" });
-          throw new PublishedVaultStorageError("IPFS_GATEWAY_INVALID_JSON", "ipfs-gateway");
-        }
-      }
-    } catch (error) {
-      if (error instanceof PublishedVaultStorageError) throw error;
-      if (attempt === MAX_FETCH_ATTEMPTS - 1) {
-        const code = error instanceof Error && error.name === "AbortError" ? "IPFS_GATEWAY_TIMEOUT" : "IPFS_GATEWAY_NETWORK_ERROR";
-        console.error("[Published Vaults] IPFS gateway request failed:", { stage: "ipfs-gateway", code });
-        throw new PublishedVaultStorageError(code, "ipfs-gateway");
-      }
-    } finally {
-      clearTimeout(timeoutId);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
-  }
-  throw new PublishedVaultStorageError("IPFS_GATEWAY_UNAVAILABLE", "ipfs-gateway");
+  return {
+    id: row.id,
+    title: row.title,
+    description: row.description,
+    priceNear,
+    publisherAddress: row.publisher_address,
+    payoutAddress: row.payout_address,
+    fileRef: row.file_reference,
+    createdAt,
+    rowCount: 0,
+  };
 }
 
 function encryptDataset(dataset: string, key: Buffer): string {
@@ -236,40 +233,6 @@ function decryptDataset(value: unknown, key: Buffer): string | null {
   }
 }
 
-async function listPinataMetadataPins(): Promise<PinataPin[]> {
-  const { apiKey, secretApiKey } = getPinataConfig();
-  const pins: PinataPin[] = [];
-  let pageOffset = 0;
-
-  while (pins.length < MAX_LISTED_VAULTS) {
-    const params = new URLSearchParams({
-      status: "pinned",
-      pageLimit: String(PIN_PAGE_SIZE),
-      pageOffset: String(pageOffset),
-    });
-    params.set("metadata[name]", METADATA_PIN_NAME);
-
-    const response = await pinataFetch(`${PINATA_API_URL}/data/pinList?${params}`, {
-      headers: pinataHeaders(apiKey, secretApiKey),
-      cache: "no-store",
-    }, "pinata-list");
-    const result = await pinataJson<PinataPinList>(response, "pinata-list");
-    const rows = result.rows ?? [];
-    pins.push(...rows.filter((pin) => pin.metadata?.name === METADATA_PIN_NAME));
-    if (rows.length < PIN_PAGE_SIZE || pageOffset + rows.length >= (result.count ?? 0)) break;
-    pageOffset += rows.length;
-  }
-
-  return pins.slice(0, MAX_LISTED_VAULTS);
-}
-
-async function fetchStoredMetadata(cid: string): Promise<PublishedVaultRecord | null> {
-  if (!isCid(cid)) return null;
-  const value = await fetchIpfsJson<unknown>(cid);
-  if (!isStoredVaultMetadata(value)) return null;
-  return { ...value, id: cid };
-}
-
 export function toPublishedVaultListing(record: PublishedVaultRecord): MarketplaceVault {
   return {
     id: record.id,
@@ -287,49 +250,52 @@ export function toPublishedVaultListing(record: PublishedVaultRecord): Marketpla
 }
 
 export async function listPublishedVaults(): Promise<MarketplaceVault[]> {
-  const pins = await listPinataMetadataPins();
-  const records = await Promise.all(pins.map(async (pin) => {
-    try {
-      return await fetchStoredMetadata(pin.ipfs_pin_hash);
-    } catch {
-      return null;
-    }
-  }));
-  return records
+  const config = getSupabaseConfig();
+  const query = new URLSearchParams({
+    select: VAULT_COLUMNS,
+    order: "created_at.desc",
+    limit: String(MAX_LISTED_VAULTS),
+  });
+  const response = await supabaseFetch(databaseUrl(config, query), {
+    headers: supabaseHeaders(config),
+  }, "vault-list");
+  const rows = await supabaseJson<unknown>(response, "vault-list");
+  if (!Array.isArray(rows)) {
+    console.error("[Published Vaults] Supabase returned an invalid vault list.", { stage: "vault-list" });
+    throw new PublishedVaultStorageError("SUPABASE_INVALID_RESPONSE", "vault-list");
+  }
+  return rows
+    .map(mapSupabaseVault)
     .filter((record): record is PublishedVaultRecord => record !== null)
-    .sort((left, right) => right.createdAt - left.createdAt)
     .map(toPublishedVaultListing);
 }
 
 export async function getPublishedVault(id: string): Promise<PublishedVaultRecord | null> {
-  if (!isCid(id)) return null;
-  const { apiKey, secretApiKey } = getPinataConfig();
-  const params = new URLSearchParams({
-    status: "pinned",
-    hashContains: id,
-    pageLimit: "1",
-    pageOffset: "0",
+  if (!isUuid(id)) return null;
+  const config = getSupabaseConfig();
+  const query = new URLSearchParams({
+    select: VAULT_COLUMNS,
+    id: `eq.${id}`,
+    limit: "1",
   });
-  const response = await pinataFetch(`${PINATA_API_URL}/data/pinList?${params}`, {
-    headers: pinataHeaders(apiKey, secretApiKey),
-    cache: "no-store",
-  }, "pinata-list");
-  const result = await pinataJson<PinataPinList>(response, "pinata-list");
-  const pin = result.rows?.find((row) => row.ipfs_pin_hash === id && row.metadata?.name === METADATA_PIN_NAME);
-  return pin ? fetchStoredMetadata(id) : null;
+  const response = await supabaseFetch(databaseUrl(config, query), {
+    headers: supabaseHeaders(config),
+  }, "vault-lookup");
+  const rows = await supabaseJson<unknown>(response, "vault-lookup");
+  if (!Array.isArray(rows)) {
+    console.error("[Published Vaults] Supabase returned an invalid vault record.", { stage: "vault-lookup" });
+    throw new PublishedVaultStorageError("SUPABASE_INVALID_RESPONSE", "vault-lookup");
+  }
+  return mapSupabaseVault(rows[0]);
 }
 
 export async function getPublishedVaultDataset(record: PublishedVaultRecord): Promise<string | null> {
-  const { encryptionKey } = getPinataConfig();
-  const encrypted = await fetchIpfsJson<unknown>(record.fileRef);
-  if (!encrypted) {
-    console.error("[Published Vaults] Encrypted dataset was not available from the IPFS gateway.", {
-      stage: "dataset-download",
-      code: "DATASET_NOT_FOUND",
-    });
-    return null;
-  }
-  const dataset = decryptDataset(encrypted, encryptionKey);
+  const config = getSupabaseConfig();
+  const response = await supabaseFetch(storageObjectUrl(config, record.fileRef), {
+    headers: supabaseHeaders(config),
+  }, "dataset-download");
+  const encrypted = await supabaseJson<unknown>(response, "dataset-download");
+  const dataset = decryptDataset(encrypted, config.encryptionKey);
   if (!dataset) {
     console.error("[Published Vaults] Encrypted dataset could not be decrypted.", {
       stage: "dataset-decryption",
@@ -339,50 +305,45 @@ export async function getPublishedVaultDataset(record: PublishedVaultRecord): Pr
   return dataset;
 }
 
-async function pinJson(content: unknown, name: string, keyvalues: Record<string, string>): Promise<string> {
-  const { apiKey, secretApiKey } = getPinataConfig();
-  const response = await pinataFetch(`${PINATA_API_URL}/pinning/pinJSONToIPFS`, {
-    method: "POST",
-    headers: {
-      ...pinataHeaders(apiKey, secretApiKey),
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      pinataContent: content,
-      pinataMetadata: { name, keyvalues },
-    }),
-    cache: "no-store",
-  }, "metadata-upload");
-  const result = await pinataJson<{ IpfsHash?: string }>(response, "metadata-upload");
-  if (!result.IpfsHash || !isCid(result.IpfsHash)) {
-    console.error("[Published Vaults] Pinata returned an invalid metadata CID.", { stage: "metadata-upload" });
-    throw new PublishedVaultStorageError("INVALID_METADATA_CID", "metadata-upload");
+async function uploadEncryptedDataset(
+  config: SupabaseConfig,
+  fileReference: string,
+  dataset: string,
+) {
+  try {
+    const response = await supabaseFetch(storageObjectUrl(config, fileReference), {
+      method: "POST",
+      headers: supabaseHeaders(config, { "Content-Type": "application/json" }),
+      body: encryptDataset(dataset, config.encryptionKey),
+    }, "dataset-upload");
+    await supabaseJson<unknown>(response, "dataset-upload");
+  } catch (error) {
+    if (!(error instanceof PublishedVaultStorageError)) throw error;
+    try {
+      const response = await supabaseFetch(storageObjectUrl(config, fileReference), {
+        headers: supabaseHeaders(config),
+      }, "dataset-upload-recovery");
+      const encrypted = await supabaseJson<unknown>(response, "dataset-upload-recovery");
+      if (decryptDataset(encrypted, config.encryptionKey) === dataset) return;
+    } catch {
+      throw error;
+    }
+    throw error;
   }
-  return result.IpfsHash;
 }
 
-async function pinEncryptedDataset(dataset: string, id: string): Promise<string> {
-  const { apiKey, secretApiKey, encryptionKey } = getPinataConfig();
-  const form = new FormData();
-  const bytes = new TextEncoder().encode(encryptDataset(dataset, encryptionKey));
-  form.append("file", new Blob([bytes], { type: "application/json" }), `${id}.encrypted.json`);
-  form.append("pinataMetadata", JSON.stringify({
-    name: `blindsight-vault-data-${id}`,
-    keyvalues: { application: "blindsight", kind: "encrypted-vault-data" },
-  }));
-
-  const response = await pinataFetch(`${PINATA_API_URL}/pinning/pinFileToIPFS`, {
-    method: "POST",
-    headers: pinataHeaders(apiKey, secretApiKey),
-    body: form,
-    cache: "no-store",
-  }, "dataset-upload");
-  const result = await pinataJson<{ IpfsHash?: string }>(response, "dataset-upload");
-  if (!result.IpfsHash || !isCid(result.IpfsHash)) {
-    console.error("[Published Vaults] Pinata returned an invalid dataset CID.", { stage: "dataset-upload" });
-    throw new PublishedVaultStorageError("INVALID_DATASET_CID", "dataset-upload");
-  }
-  return result.IpfsHash;
+function matchesPublishedInput(
+  record: PublishedVaultRecord | null,
+  input: { id: string; title: string; description: string; priceNear: string; publisherAddress: string; payoutAddress: string; fileReference: string },
+) {
+  return record !== null
+    && record.id === input.id
+    && record.title === input.title
+    && record.description === input.description
+    && record.priceNear === input.priceNear
+    && record.publisherAddress === input.publisherAddress
+    && record.payoutAddress === input.payoutAddress
+    && record.fileRef === input.fileReference;
 }
 
 export async function createPublishedVault(input: {
@@ -411,22 +372,41 @@ export async function createPublishedVault(input: {
   }
 
   const prepared = prepareDataset(dataset);
-  const id = randomBytes(16).toString("hex");
-  const fileRef = await pinEncryptedDataset(dataset, id);
-  const metadata: StoredVaultMetadata = {
-    title,
-    description,
-    priceNear,
-    publisherAddress,
-    payoutAddress,
-    fileRef,
-    createdAt: Date.now(),
-    rowCount: prepared.rowCount,
-  };
-  const metadataCid = await pinJson(metadata, METADATA_PIN_NAME, {
-    application: "blindsight",
-    kind: "vault-metadata",
-  });
+  const config = getSupabaseConfig();
+  const id = randomUUID();
+  const fileReference = `${id}.json`;
+  await uploadEncryptedDataset(config, fileReference, dataset);
 
-  return toPublishedVaultListing({ ...metadata, id: metadataCid });
+  const query = new URLSearchParams({
+    select: VAULT_COLUMNS,
+  });
+  const recordInput = { id, title, description, priceNear, publisherAddress, payoutAddress, fileReference };
+  try {
+    const metadataResponse = await supabaseFetch(databaseUrl(config, query), {
+      method: "POST",
+      headers: supabaseHeaders(config, {
+        "Content-Type": "application/json",
+        Prefer: "return=representation",
+      }),
+      body: JSON.stringify({
+        id,
+        title,
+        description,
+        price: priceNear,
+        publisher_address: publisherAddress,
+        payout_address: payoutAddress,
+        file_reference: fileReference,
+      }),
+    }, "vault-insert");
+    const rows = await supabaseJson<unknown>(metadataResponse, "vault-insert");
+    const record = Array.isArray(rows) ? mapSupabaseVault(rows[0]) : null;
+    if (!record) throw new PublishedVaultStorageError("SUPABASE_INVALID_RESPONSE", "vault-insert");
+    return toPublishedVaultListing({ ...record, rowCount: prepared.rowCount });
+  } catch (error) {
+    const existing = await getPublishedVault(id).catch(() => null);
+    if (existing && matchesPublishedInput(existing, recordInput)) {
+      return toPublishedVaultListing({ ...existing, rowCount: prepared.rowCount });
+    }
+    throw error;
+  }
 }

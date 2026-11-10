@@ -768,7 +768,7 @@ export async function POST(req: NextRequest) {
     receiptId = nearReceiptId;
 
     // 3. Resolve dataset content only on the server. Sample data comes from
-    // the server catalog, and published data comes from private KV storage.
+    // the server catalog, and published data comes from Supabase Storage.
     failureStage = "dataset-resolution";
     const sampleDataset = resolvedVault ? getDemoVaultDataset(resolvedVault.id) : undefined;
     const fileText = typeof fileContent === "string" ? fileContent.trim() : "";
