@@ -19,18 +19,31 @@ export const NEAR_TESTNET_EXPLORER_TX_URL = "https://testnet.nearblocks.io/txns/
  */
 export const DEFAULT_TREASURY_ACCOUNT = "blindsight-ceeaa6612a.testnet";
 
+function isValidTreasuryAccountId(accountId: string): boolean {
+  return accountId.length >= 2
+    && accountId.length <= 64
+    && accountId === accountId.toLowerCase()
+    && /^[a-z0-9._-]+$/.test(accountId)
+    && !/^[._-]|[._-]$|[._-]{2}/.test(accountId);
+}
+
 /** A transfer older than this is rejected to reduce replay risk. */
 export const PAYMENT_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 
 const YOCTO_PER_NEAR = BigInt(10) ** BigInt(24);
 
 export function getTreasuryAccount(): string {
-  const configured =
-    process.env.NEXT_PUBLIC_BLINDSIGHT_TREASURY_ACCOUNT
-    ?? process.env.BLINDSIGHT_TREASURY_ACCOUNT
-    ?? "";
-  const trimmed = configured.trim();
-  return trimmed || DEFAULT_TREASURY_ACCOUNT;
+  const configuredAccounts = [
+    process.env.NEXT_PUBLIC_BLINDSIGHT_TREASURY_ACCOUNT,
+    process.env.BLINDSIGHT_TREASURY_ACCOUNT,
+  ];
+
+  for (const configured of configuredAccounts) {
+    const accountId = configured?.trim() ?? "";
+    if (isValidTreasuryAccountId(accountId)) return accountId;
+  }
+
+  return DEFAULT_TREASURY_ACCOUNT;
 }
 
 export function getTreasuryExplorerUrl(accountId: string = getTreasuryAccount()): string {

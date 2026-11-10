@@ -25,11 +25,13 @@ export type MarketplaceVault = {
   priceNear: string;
   /** Row count of the sample dataset served to inference. */
   rows: number;
-  /** Honest descriptor for the sample snapshot. */
+  /** Display descriptor for the listing's last update. */
   updated: string;
-  /** Only present for vaults published from this browser session. */
+  /** Raw dataset for legacy in-session listings; never included in shared listings. */
   dataset?: string;
-  source: "sample" | "session";
+  publisherAddress?: string;
+  createdAt?: number;
+  source: "sample" | "session" | "published";
   sampleColumns?: string[];
 };
 
@@ -38,10 +40,10 @@ export const DEMO_VAULTS: MarketplaceVault[] = [
     id: "q3-financial-market-demand",
     title: "Q3 Financial & Market Demand",
     description:
-      "Synthetic quarterly revenue, retention, and demand signals from a private B2B SaaS operator.",
+      "Example quarterly revenue, retention, and demand trends across customer segments.",
     category: "Finance",
     seller: DEFAULT_TREASURY_ACCOUNT,
-    priceNear: "0.05",
+    priceNear: "0.5",
     rows: 16,
     updated: "static sample snapshot",
     source: "sample",
@@ -58,10 +60,10 @@ export const DEMO_VAULTS: MarketplaceVault[] = [
     id: "medical-research-cohort-2026",
     title: "Medical Research Cohort 2026",
     description:
-      "Synthetic de-identified multi-site cohort outcomes, biomarker signals, and adverse-event rates.",
+      "Example cohort outcomes, biomarker signals, and adverse-event rates across multiple sites.",
     category: "Health",
     seller: DEFAULT_TREASURY_ACCOUNT,
-    priceNear: "0.08",
+    priceNear: "0.35",
     rows: 14,
     updated: "static sample snapshot",
     source: "sample",
@@ -78,10 +80,10 @@ export const DEMO_VAULTS: MarketplaceVault[] = [
     id: "solidity-security-audit-report",
     title: "Solidity Security Audit Report",
     description:
-      "Synthetic open and resolved findings, coverage, and risk posture for a production DeFi protocol.",
+      "Example open and resolved findings, coverage, and risk patterns from a DeFi security audit.",
     category: "Security",
     seller: DEFAULT_TREASURY_ACCOUNT,
-    priceNear: "0.04",
+    priceNear: "0.8",
     rows: 15,
     updated: "static sample snapshot",
     source: "sample",

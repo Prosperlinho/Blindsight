@@ -95,7 +95,7 @@ let rpcId = 0;
 async function nearRpc<T>(
   method: string,
   params: Record<string, unknown>,
-  timeoutMs = 20_000,
+  timeoutMs = 8_000,
 ): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -111,6 +111,7 @@ async function nearRpc<T>(
         params,
       }),
       cache: "no-store",
+      signal: controller.signal,
     });
 
     if (!response.ok) {
@@ -130,6 +131,11 @@ async function nearRpc<T>(
       throw new RpcLookupError("EMPTY_RESULT", "NEAR RPC returned an empty result.");
     }
     return payload.result;
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new RpcLookupError("TIMEOUT_ERROR", "NEAR RPC timed out.");
+    }
+    throw error;
   } finally {
     clearTimeout(timer);
   }
@@ -212,20 +218,24 @@ export async function verifyNearTransfer(
 
   let outcome: TransactionOutcome | null = null;
   let lastError: unknown = null;
+  const maxAttempts = 3;
 
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  // The wallet has already returned the signed transaction, so the lookup
+  // normally succeeds on the first try. Keep the backoff short so a briefly
+  // lagging RPC does not add seconds to the paid-answer path.
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
       outcome = await nearRpc<TransactionOutcome>("tx", {
         tx_hash: txHash,
         sender_account_id: payerAccountId,
-        wait_until: "FINAL",
+        wait_until: "EXECUTED_OPTIMISTIC",
       });
       break;
     } catch (error) {
       lastError = error;
       const retryable = error instanceof RpcLookupError && RETRYABLE_RPC_CODES.has(error.code);
-      if (!retryable) break;
-      await delay(800 + attempt * 700);
+      if (!retryable || attempt === maxAttempts - 1) break;
+      await delay(350 + attempt * 450);
     }
   }
 
@@ -308,7 +318,7 @@ export async function verifyNearTransfer(
 
   if (blockHash) {
     try {
-      const block = await nearRpc<BlockResult>("block", { block_id: blockHash }, 10_000);
+      const block = await nearRpc<BlockResult>("block", { block_id: blockHash }, 5_000);
       blockHeight = typeof block.header?.height === "number" ? block.header.height : null;
       const blockTimeMs = timestampToMs(block.header?.timestamp);
       if (blockTimeMs !== null && Date.now() - blockTimeMs > PAYMENT_MAX_AGE_MS) {

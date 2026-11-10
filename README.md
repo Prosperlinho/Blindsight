@@ -15,7 +15,7 @@ receives the sample records that are used for inference.
 
 ---
 
-## Real vs simulated
+## Real vs prototype (honest disclosure)
 
 BlindSight is deliberately explicit about which parts are real, because a judge should be able to
 verify the payment and the answer independently.
@@ -24,20 +24,22 @@ verify the payment and the answer independently.
 | --- | --- | --- |
 | Wallet connection | **Real** | NEAR Wallet Selector with MyNearWallet and Meteor on `testnet`. The connected account comes from Wallet Selector state. |
 | Account balance | **Real** | Read from the public FastNear testnet RPC (`view_account`). There is no local ledger or minted balance. |
-| Query payment | **Real** | The buyer signs a native NEAR transfer to the funded treasury `blindsight-ceeaa6612a.testnet`. |
+| Query payment | **Real** | The buyer signs a native NEAR transfer. Sample-vault fees go to the funded treasury; published-vault fees go to the publisher's configured payout account. |
 | Payment verification | **Real** | The server fetches the finalized transaction from `https://rpc.testnet.fastnear.com` and checks signer, receiver, amount, execution status, and age. |
 | Answer gating | **Real** | `/api/verify-payment` confirms the transfer, then `/api/query-tee` re-verifies the same hash before inference runs. |
 | AI inference | **Real** | The server calls NEAR AI Cloud (`zai-org/GLM-5.1-FP8`) with `NEAR_AI_API_KEY`. |
 | Sample datasets | **Fictional data, real gating** | Three synthetic datasets live in server-only code. The browser only sends a `vaultId`. |
-| Dataset lifecycle | **Simulated enclave** | The route drops its prepared dataset reference after inference. JavaScript cannot guarantee heap zeroing, and this is not hardware isolation. |
-| TEE / enclave attestation | **Simulated** | The UI shows a deterministic token derived from the payment hash and answer. No hardware attestation exists. |
-| Publisher payout | **Not executed** | Sample publishers are fictional. The full query fee settles to the BlindSight treasury. |
+| Dataset lifecycle | **Prototype enclave (mimicked)** | The route drops its prepared dataset reference after inference. JavaScript cannot guarantee heap zeroing, and this is not hardware isolation. |
+| TEE / enclave attestation | **Mimicked** | No hardware attestation exists and the UI does not display a fake attestation token. The interface labels the enclave as a server-side prototype. |
+| Publisher payout | **Real for published vaults** | A published vault's full query fee is verified against and transferred to its configured payout account. Sample-vault fees go to the BlindSight treasury. |
+| Shared vault storage | **Pinata IPFS** | Published metadata is pinned as public JSON and discovered through the shared Pinata account. Dataset content is encrypted before pinning; listing responses contain metadata only. |
 | Anti-probing checks | **Best effort** | In-memory query history and pattern checks per server instance. Not a guarantee against dataset reconstruction. |
 | Replay protection | **Best effort** | In-memory, per-instance map with a 24-hour TTL. It is not a network-wide nonce. |
-| Gloam shielded rail | **Not integrated** | See [Why there is no shielded rail](#why-there-is-no-shielded-rail). |
+| Gloam private rail | **Implemented, optional** | A real shielded ETH transfer on Robinhood Chain testnet, settled and swept server-side before the answer. It is hidden until `NEXT_PUBLIC_GLOAM_ENABLED=true`, after the end-to-end test passes. See [Private payments](#private-payments-optional). |
 
-There are no faucet buttons, local balances, mock addresses, fake transaction hashes, or simulated
-payment-success paths in the app.
+There are no local balances, mock addresses, fake transaction hashes, or simulated payment-success
+paths in the app. The only external prerequisite is testnet NEAR for the query fee; use the
+[NEAR testnet faucet](https://near-faucet.io/) if your wallet is empty.
 
 ---
 
@@ -82,11 +84,13 @@ Buyer browser                     Next.js server                   NEAR testnet
 
 What the UI shows at each stage:
 
-1. **Payment pending** — the wallet is open and the transfer is awaiting approval.
-2. **Verifying** — the transaction hash has been submitted and the server is checking the RPC.
-3. **Payment confirmed** — the amount, receiver, block height, and explorer link are displayed.
-4. **Answer ready** — the insight appears with the same transaction hash and the inference model.
-5. **Error** — the failure reason is displayed. If the payment was already confirmed, the answer can
+1. **Connecting** — the wallet selector opens and the connected testnet account appears in the header.
+2. **Paying** — the wallet is open and the transfer is awaiting approval.
+3. **Payment confirmed** — the server has checked the finalized transfer; the amount, receiver, block
+   height, and explorer link are displayed.
+4. **Generating answer** — NEAR AI inference starts only after the payment is confirmed.
+5. **Answer ready** — the insight appears with the same transaction hash and the inference model.
+6. **Error** — the failure reason is displayed. If the payment was already confirmed, the answer can
    be retried with the same transfer instead of paying twice.
 
 The server does not trust the client. It reads the transaction from RPC and validates:
@@ -102,29 +106,51 @@ The server does not trust the client. It reads the transaction from RPC and vali
 
 ## Judge demo (about 3 minutes)
 
+The live app is preloaded with three sample vaults, so there is no setup beyond a funded testnet
+wallet.
+
 1. Open [https://blindsight-zeta.vercel.app/](https://blindsight-zeta.vercel.app/).
+   **See:** the **Paid query console** with three sample vaults and a **Connect Wallet** button.
 2. Click **Connect Wallet** and choose a NEAR testnet wallet.
-3. Fund the account from a NEAR testnet faucet if it has no testnet NEAR. This is an external
-   prerequisite; the app itself has no faucet.
+   **See:** the wallet selector opens; after approval the header shows your `*.testnet` account and
+   its real RPC balance.
+3. If the account has no testnet NEAR, open the [NEAR testnet faucet](https://near-faucet.io/) and
+   fund it. This is an external prerequisite; the app itself has no faucet.
 4. Keep one of the preloaded sample vaults selected:
-   - **Q3 Financial & Market Demand** — 0.05 NEAR
-   - **Medical Research Cohort 2026** — 0.08 NEAR
-   - **Solidity Security Audit Report** — 0.04 NEAR
+  - **Q3 Financial & Market Demand** — 0.5 NEAR
+  - **Medical Research Cohort 2026** — 0.35 NEAR
+  - **Solidity Security Audit Report** — 0.8 NEAR
+   **See:** the vault card shows the price, publisher, row count, and the treasury fee recipient.
 5. Ask a question, for example:
    - *Which segment has the highest year-over-year growth?*
    - *Summarize the most serious open security findings.*
+   **See:** the query composer fills; the button reads **Pay … NEAR & ask**.
 6. Click **Pay … NEAR & ask**.
+   **See:** the wallet popup asks you to approve a real native NEAR transfer to
+   `blindsight-ceeaa6612a.testnet`.
 7. Approve the transfer in the wallet.
-8. Watch the three steps: **Sign NEAR payment → Verify on-chain → Generate answer**.
-9. Confirm the green **Payment confirmed on NEAR testnet** panel and open the NEARBlocks link.
-10. The answer appears below. Its transaction hash is the same one you just verified on-chain.
+   **See:** the button advances through **Paying... → Confirming payment... → Payment confirmed →
+   Generating answer...**.
+8. Confirm the green **Payment confirmed on NEAR testnet** panel and open the NEARBlocks link.
+   **See:** the finalized transaction on the explorer with the same hash the app displays.
+9. The answer appears below.
+   **See:** **Answer ready** with the insight, the verified payment amount and block height, the
+   inference model, and the same transaction hash. The raw dataset is never returned.
 
 Verification plus inference typically takes 5–30 seconds. The wallet also charges a small network
-fee. If inference times out, the confirmed payment remains retryable.
+fee. If inference times out, the confirmed payment remains retryable without paying twice.
 
-The **Vault Explorer** lets you switch between the three samples. The **Publish Vault** tab creates a
-browser-session listing from your own text files; publishing is local to the session, while every
-query still settles with a real testnet transfer to the treasury.
+The **Vault Explorer** lets you switch between the samples and published vaults. The **Publish Vault**
+tab pins metadata and encrypted dataset content to IPFS, so listings are shared through the Pinata
+account and persist across deployments. Query fees for published vaults go to their configured payout account; sample
+vault fees continue to go to the treasury.
+
+### If the page looks stale
+
+The app sends `Cache-Control: no-store` for `/`, but an already-cached tab can still survive a
+deploy. Do a hard refresh (`Ctrl+Shift+R` / `Cmd+Shift+R`) or open the URL in a private window. The
+current build shows **Pay 0.5 NEAR & ask**, **Payment confirmed**, and **Answer ready**; it does not
+contain the old "simulated locally" copy.
 
 ---
 
@@ -159,9 +185,34 @@ cp .env.example .env.local
 | `NEXT_PUBLIC_BLINDSIGHT_TREASURY_ACCOUNT` | Recommended | Public treasury address shown to the browser. Defaults to `blindsight-ceeaa6612a.testnet`. |
 | `BLINDSIGHT_TREASURY_ACCOUNT` | Optional | Server-side override for the same treasury. |
 | `NEXT_PUBLIC_NEAR_NETWORK` | Optional | `testnet` (the only supported value). |
+| `PINATA_API_KEY` | Required for published vaults | Pinata server-side API key. |
+| `PINATA_SECRET_API_KEY` | Required for published vaults | Pinata server-side secret. Never expose it with a `NEXT_PUBLIC_` prefix. |
+| `PUBLISHED_VAULT_ENCRYPTION_KEY` | Required for published vaults | Stable 32-byte hex key for AES-256-GCM dataset encryption. Back it up; rotating it makes existing uploads unreadable. |
+| `PINATA_GATEWAY_URL` | Optional | Custom IPFS gateway base URL. Defaults to `https://gateway.pinata.cloud`. |
+| `GLOAM_RECEIVE_KEY` | Private rail | JSON receive identity from `npm run gloam:keygen`. Opens and sweeps private payments. |
+| `GLOAM_NOTE_STORE_KEY` | Private rail | 32-byte hex key that encrypts the settled note/receipt store at rest. |
+| `GLOAM_NOTE_STORE_PATH` | Optional | Override the encrypted store path. Defaults to `.gloam-data/notes.enc.json`. |
+| `GLOAM_CIRCUIT_CACHE_PATH` | Optional | Override where the server caches proof artifacts. Defaults to the OS temp directory. |
+| `NEXT_PUBLIC_GLOAM_ENABLED` | Optional | Set `true` only after the private testnet flow passes. Hides the private payment control by default. |
 
 If you point the treasury at a different account, it must exist on testnet and the buyer must be able
 to transfer to it. Verification only needs the public account address.
+
+To enable shared publishing on Vercel, create Pinata API credentials and set `PINATA_API_KEY`,
+`PINATA_SECRET_API_KEY`, and `PUBLISHED_VAULT_ENCRYPTION_KEY` in the deployment's server-side
+environment. Generate the encryption key with:
+
+```bash
+node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
+```
+
+Keep the encryption key stable and back it up. Metadata is pinned as JSON, and the Pinata account's
+app-tagged metadata pins provide the shared discovery index. Dataset bytes are encrypted before
+they are pinned separately. Without these values, sample vaults continue to work, while shared
+listing and publishing are unavailable.
+
+The default NEAR rail needs no Gloam configuration. Without the `GLOAM_*` values the private
+endpoints answer `503` and the rest of the app works normally.
 
 Without `NEAR_AI_API_KEY`, the app still boots and payments still verify, but a paid query returns
 `INFERENCE_NOT_CONFIGURED`. The confirmed payment stays retryable after you add the key.
@@ -192,6 +243,8 @@ app/
   api/
     verify-payment/route.ts    Explicit "payment confirmed" endpoint
     query-tee/route.ts         Re-verify payment, resolve dataset, run inference
+    vaults/route.ts            Shared IPFS marketplace listing and publishing
+    gloam/requirements/route.ts  Public price + receive tag for private payments
     vault/parse/route.ts       Real text/PDF extraction (rejects unreadable files)
 components/
   QueryVault.tsx               Paid query console and stage machine
@@ -206,8 +259,15 @@ lib/
   nearWallet.ts                Wallet Selector setup and disconnect
   demoVaults.ts                Client-safe sample vault metadata
   demoVaultDatasets.ts         Server-only synthetic datasets
+  publishedVaults.ts           Pinata metadata discovery and encrypted IPFS datasets
   datasetQuality.ts            Dataset preparation and in-memory cache
+  gloamConfig.ts               Shared private-rail network and price
+  evm-gloam.ts                 Browser shield/prove/pay helper
+  gloamServer.ts               Server settlement, sweep, encrypted note store
   auditLog.ts                  Client audit-log entry type
+scripts/
+  gloam-keygen.mjs             Generate the receive identity + store key
+  gloam-testnet-e2e.mjs        Real shield → prove → pay → answer test
 ```
 
 ---
@@ -234,7 +294,7 @@ Returns:
     "txHash": "…",
     "payerAccountId": "buyer.testnet",
     "receiverId": "blindsight-ceeaa6612a.testnet",
-    "amountNear": "0.05",
+    "amountNear": "0.5",
     "blockHeight": 123456789,
     "verifiedAt": "…"
   }
@@ -242,6 +302,26 @@ Returns:
 ```
 
 Failures return `{ success: false, verified: false, error, code }` with a 4xx status.
+
+### `GET /api/gloam/requirements?vaultId=…`
+
+Returns the public price and receive tag for the optional private rail. The receive key never leaves
+the server.
+
+```json
+{
+  "success": true,
+  "requirements": {
+    "scheme": "gloam-private",
+    "network": 46630,
+    "maxAmountRequired": "200000000000000",
+    "asset": "0x0000000000000000000000000000000000000000",
+    "payTo": "gloamr1.…",
+    "resource": "blindsight:query:q3-financial-market-demand",
+    "poolAddress": "0x…"
+  }
+}
+```
 
 ### `POST /api/query-tee`
 
@@ -254,11 +334,17 @@ Failures return `{ success: false, verified: false, error, code }` with a 4xx st
 }
 ```
 
-The server re-verifies the transfer, resolves the sample dataset by `vaultId`, and then calls
-inference. Session-published vaults send their dataset in the request instead of a `vaultId`.
+The server re-verifies the transfer, resolves sample data from the server catalog or published data
+from IPFS, and then calls inference. Published dataset text is never included in the listing
+response or sent back to the buyer.
+
+For the private rail, send the same shape with `"paymentType": "GLOAM"` and the sealed `payload`
+returned by `buildGloamPayment` instead of a NEAR `txHash`. The server settles and sweeps that payload
+before inference runs; there is no separate verification call.
 
 A successful response includes `insight`, `receiptId` (the verified transaction hash), `payment`,
-`inference` metadata, and an explicitly labeled `attestation` object with `simulated: true`.
+`inference` metadata, and a `prototype` object that states the TEE is mimicked and that the dataset
+reference is dropped after inference. No attestation token is fabricated.
 
 ---
 
@@ -275,16 +361,52 @@ needed for the payment step. The inference key stays on the server.
 
 ---
 
-## Why there is no shielded rail
+## Private payments (optional)
 
-`@gloamtrade/sdk` is an **EVM** privacy rail (Tempo, Robinhood, Base, Ethereum). Its deposit and
-zero-knowledge proof flow requires an EVM wallet, `snarkjs`, circuit artifacts, and funded testnet
-stablecoin. NEAR Wallet Selector cannot sign those transactions, and this build intentionally ships
-only one real payment rail.
+The native NEAR rail is the default. BlindSight also ships a real **Gloam** rail for buyers who want
+the amount and payer hidden. It is a separate EVM stack on **Robinhood Chain testnet (46630)**, so it
+needs an injected EVM wallet such as MetaMask and a little testnet ETH.
 
-The earlier simulated Gloam receipt UI was removed rather than presented as a real private payment.
-Adding Gloam would mean adding a second wallet stack and a funded EVM testnet environment; that is
-outside this NEAR-only prototype.
+What is real:
+
+- **Deposit (shield).** The buyer deposits native ETH into Gloam's shielded pool with a Groth16 proof
+  generated in the browser by `@gloamtrade/sdk` + `snarkjs`.
+- **Private payment.** For a question, the browser builds a zero-knowledge private transfer to
+  BlindSight's published receive tag. The amount, sender, and recipient do not appear on chain.
+- **Server settlement.** `settleGloamQueryPayment` opens the sealed note, verifies the amount binding,
+  checks the on-chain nullifier, and **sweeps** the payment into a fresh note only the server can
+  spend. Access is granted only when the sweep is final.
+- **No double charge.** A failed inference releases the receipt so the same settled payment can be
+  retried. The payer's change note stays in the browser for later questions.
+
+### Configure
+
+```bash
+npm run gloam:keygen
+```
+
+Copy the two printed values into `.env.local` (`GLOAM_RECEIVE_KEY` and `GLOAM_NOTE_STORE_KEY`), then
+restart the server. Keep `GLOAM_RECEIVE_KEY` stable: it is the only key that can open incoming
+payments.
+
+### Test end to end before exposing it
+
+```bash
+# with the app running on http://localhost:3000 and the GLOAM_* values set
+PAYER_PRIVATE_KEY=0x... npm run gloam:test
+```
+
+The script asks the app for the price and receive tag, shields testnet ETH if the payer has no note,
+proves and broadcasts the private transfer, then posts the paid question to `/api/query-tee`. It
+prints the answer and keeps the change note in `.gloam-e2e-notes.json`. Fund the payer from the
+Robinhood Chain testnet faucet first.
+
+Only after that succeeds, set `NEXT_PUBLIC_GLOAM_ENABLED=true` to show the private payment control in
+the marketplace. Until then the rail stays completely out of the UI.
+
+The server stores settled notes and receipts in an AES-256-GCM file. On a multi-instance deployment,
+point `GLOAM_NOTE_STORE_PATH` at shared storage, or use a single instance, so a retry sees the same
+settled receipt.
 
 ---
 
@@ -292,16 +414,18 @@ outside this NEAR-only prototype.
 
 This is a hackathon prototype, not a production confidential-computing service.
 
-- **No hardware TEE.** Attestation is a deterministic label, not a hardware quote.
+- **No hardware TEE.** The enclave is a server-side prototype and no hardware attestation is
+  verified. The UI says so directly.
 - **The server sees the data.** Dataset text is sent to the configured NEAR AI endpoint for
   inference. Use synthetic or non-sensitive data only.
-- **The treasury is custodial.** Fees settle to a single testnet account. There is no escrow contract
-  and no publisher payout.
+- **There is no escrow contract.** Sample fees settle to the testnet treasury; published-vault fees
+  settle directly to the configured publisher payout account.
 - **Replay protection is best effort.** It uses an in-memory map and resets when a serverless
   instance restarts.
 - **Anti-probing is heuristic.** It raises the cost of extraction; it does not make a dataset
   impossible to reconstruct.
-- **Session vaults are browser-local.** Publishing does not write to a contract or IPFS. The dataset
-  is sent to the server only when a paid query runs.
+- **Published files are encrypted on IPFS.** Metadata is public; dataset bytes are encrypted before
+  pinning and decrypted server-side for paid inference. The app sends the dataset to NEAR AI after a
+  paid query; use synthetic or non-sensitive data.
 
 Do not use real personal, medical, financial, or confidential data with this prototype.

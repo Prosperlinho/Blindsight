@@ -58,10 +58,6 @@ function ConnectModalDialog({ isLoading, error, onClose, onConnect }: ConnectMod
         </button>
 
         <div className="mb-7 pr-10">
-          <div className="mb-3 flex items-center gap-2 text-[11px] text-[#A7B9B0]">
-            <span className="size-1.5 rounded-full bg-emerald-500" />
-            NEAR Protocol · Testnet
-          </div>
           <h2
             id="connect-modal-title"
             className="font-serif text-2xl font-medium tracking-[-0.03em] text-[#F0FDF4] sm:text-[30px]"
@@ -69,8 +65,7 @@ function ConnectModalDialog({ isLoading, error, onClose, onConnect }: ConnectMod
             Connect your wallet
           </h2>
           <p id="connect-modal-description" className="mt-2 text-sm leading-6 text-[#A7B9B0]">
-            BlindSight has no local wallet and no faucet. Connect a real NEAR testnet account to
-            sign the on-chain query payment.
+            Connect your wallet to browse vaults and ask a question.
           </p>
         </div>
 
@@ -80,28 +75,12 @@ function ConnectModalDialog({ isLoading, error, onClose, onConnect }: ConnectMod
           disabled={isLoading}
           className="group flex w-full flex-col border border-emerald-500/40 bg-[#0B0F17]/80 p-5 text-left backdrop-blur-xl transition hover:border-emerald-400/60 hover:shadow-[0_0_20px_rgba(16,185,129,0.2)] disabled:cursor-wait disabled:opacity-65 sm:p-6"
         >
-          <span className="mb-5 inline-flex w-fit items-center gap-1.5 border border-emerald-500/30 bg-emerald-950/40 px-2 py-1 text-[10px] text-emerald-400">
-            <span aria-hidden="true">✦</span>
-            Real testnet wallet
-          </span>
-          <span className="text-[17px] font-medium text-[#F0FDF4]">Choose a NEAR wallet</span>
+          <span className="text-[17px] font-medium text-[#F0FDF4]">Connect a NEAR wallet</span>
           <span className="mt-2 text-xs leading-5 text-[#A7B9B0]">
-            MyNearWallet, Meteor, or another Wallet Selector-compatible wallet. The connected
-            account address and balance come directly from NEAR testnet.
-          </span>
-          <span className="mt-4 flex flex-col gap-2 text-xs text-[#E2F8EC]">
-            <span className="flex items-center gap-2">
-              <span className="text-[#10B981]">✓</span> Real NEAR testnet transaction
-            </span>
-            <span className="flex items-center gap-2">
-              <span className="text-[#10B981]">✓</span> Payment verified through the public RPC
-            </span>
-            <span className="flex items-center gap-2">
-              <span className="text-[#10B981]">✓</span> Answer unlocks only after confirmation
-            </span>
+            MyNearWallet, Meteor, or another supported NEAR wallet.
           </span>
           <span className="mt-auto flex items-center gap-2 pt-5 text-[11px] text-[#10B981]">
-            {isLoading ? "Opening wallet..." : "Open wallet selector"}
+            {isLoading ? "Connecting..." : "Continue to wallet"}
             <span aria-hidden="true" className="transition-transform group-hover:translate-x-1">→</span>
           </span>
         </button>
@@ -112,10 +91,6 @@ function ConnectModalDialog({ isLoading, error, onClose, onConnect }: ConnectMod
           </p>
         )}
 
-        <p className="mt-5 text-center text-[10px] leading-4 text-[#A7B9B0]">
-          Testnet only. The app never holds your keys, never mints a local balance, and never fakes
-          a payment confirmation.
-        </p>
       </section>
     </div>
   );

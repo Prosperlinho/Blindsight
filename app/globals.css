@@ -14,21 +14,19 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: Arial, Helvetica, sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
 body {
   min-height: 100vh;
-  background-color: #060B14;
+  background-color: #0B1120;
   background-image:
-    radial-gradient(60% 45% at 12% 0%, rgba(34, 211, 238, 0.12), transparent 65%),
-    radial-gradient(55% 45% at 88% 8%, rgba(139, 92, 246, 0.12), transparent 65%),
-    radial-gradient(70% 55% at 50% 100%, rgba(59, 130, 246, 0.08), transparent 70%);
+    radial-gradient(70% 50% at 50% 0%, rgba(34, 211, 238, 0.06), transparent 70%);
   background-repeat: no-repeat;
   background-attachment: fixed;
   color: var(--foreground);
-  font-family: var(--font-geist-sans), sans-serif;
+  font-family: Arial, Helvetica, sans-serif;
 }
 
 *,
@@ -165,6 +163,66 @@ textarea {
 
 .animate-fade-up {
   animation: fade-up 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* ── Landing: scroll reveal ─────────────────────────────────────────── */
+.reveal {
+  opacity: 0;
+  transform: translate3d(0, 28px, 0) scale(0.985);
+  filter: blur(4px);
+  transition:
+    opacity 0.8s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.9s cubic-bezier(0.22, 1, 0.36, 1),
+    filter 0.8s cubic-bezier(0.22, 1, 0.36, 1);
+  transition-delay: var(--reveal-delay, 0ms);
+  will-change: opacity, transform;
+}
+
+.reveal[data-from="left"] {
+  transform: translate3d(-32px, 0, 0) rotate(var(--reveal-rotate, 0deg));
+}
+
+.reveal[data-from="right"] {
+  transform: translate3d(32px, 0, 0) rotate(var(--reveal-rotate, 0deg));
+}
+
+.reveal[data-from="pop"] {
+  transform: scale(0.9) rotate(var(--reveal-rotate, 0deg));
+}
+
+.reveal[data-visible="true"] {
+  opacity: 1;
+  transform: rotate(var(--reveal-rotate, 0deg));
+  filter: none;
+}
+
+/* ── Landing: hand-drawn sketch strokes ─────────────────────────────── */
+.sketch-path {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  transition: stroke-dashoffset 1.4s cubic-bezier(0.65, 0, 0.35, 1);
+  transition-delay: calc(var(--reveal-delay, 0ms) + 250ms);
+}
+
+[data-visible="true"] .sketch-path {
+  stroke-dashoffset: 0;
+}
+
+.sketch-border {
+  border-radius: 255px 18px 225px 18px / 18px 225px 18px 255px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal,
+  .reveal[data-from] {
+    opacity: 1;
+    transform: rotate(var(--reveal-rotate, 0deg));
+    filter: none;
+  }
+
+  .sketch-path {
+    stroke-dashoffset: 0;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

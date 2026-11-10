@@ -58,7 +58,7 @@ export default function WalletProvider({ children }: { children: ReactNode }) {
 
         if (!selectorInstance) {
           if (!cancelled) {
-            setError("Wallet Selector is only available in the browser.");
+            setError("Wallet connection is unavailable.");
             setIsReady(true);
           }
           return;
@@ -103,11 +103,7 @@ export default function WalletProvider({ children }: { children: ReactNode }) {
         };
       } catch (setupError) {
         if (!cancelled) {
-          setError(
-            setupError instanceof Error
-              ? setupError.message
-              : "Wallet Selector could not be initialized.",
-          );
+          setError("Wallet connection is unavailable right now. Please refresh and try again.");
           setIsReady(true);
         }
       }
@@ -127,11 +123,7 @@ export default function WalletProvider({ children }: { children: ReactNode }) {
     try {
       await openWalletModal();
     } catch (signInError) {
-      setError(
-        signInError instanceof Error
-          ? signInError.message
-          : "Could not open the wallet modal.",
-      );
+      setError("Couldn't open your wallet. Please try again.");
       throw signInError;
     }
   }, []);
@@ -144,11 +136,7 @@ export default function WalletProvider({ children }: { children: ReactNode }) {
       setAccountId(null);
       setWallet(null);
     } catch (signOutError) {
-      setError(
-        signOutError instanceof Error
-          ? signOutError.message
-          : "Could not disconnect the wallet.",
-      );
+      setError("Couldn't disconnect your wallet. Please try again.");
       throw signOutError;
     }
   }, []);

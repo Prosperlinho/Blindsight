@@ -6,7 +6,8 @@ const nextConfig: NextConfig = {
   },
   cacheComponents: true,
   partialPrefetching: true,
-  serverExternalPackages: ["pdf-parse"],
+  transpilePackages: ["@gloamtrade/sdk"],
+  serverExternalPackages: ["pdf-parse", "snarkjs"],
   typescript: {
     ignoreBuildErrors: true,
   },
@@ -17,6 +18,19 @@ const nextConfig: NextConfig = {
         as: "*.css",
       },
     },
+  },
+  async headers() {
+    return [
+      {
+        source: "/",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "no-store, max-age=0, must-revalidate",
+          },
+        ],
+      },
+    ];
   },
 };
 
