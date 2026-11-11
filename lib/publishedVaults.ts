@@ -53,15 +53,26 @@ export class PublishedVaultStorageError extends Error {
   readonly code: string;
   readonly stage: string;
   readonly status?: number;
+  /** Supabase's own error code, e.g. PostgREST "PGRST204" or Postgres "42703". */
+  readonly supabaseCode?: string;
 
-  constructor(code: string, stage: string, status?: number) {
+  constructor(code: string, stage: string, status?: number, supabaseCode?: string) {
     super(`${stage}: ${code}${status ? ` (HTTP ${status})` : ""}`);
     this.name = "PublishedVaultStorageError";
     this.code = code;
     this.stage = stage;
     this.status = status;
+    this.supabaseCode = supabaseCode;
   }
 }
+
+/** True when Supabase rejected a request because a column doesn't exist yet. */
+function isMissingColumnError(error: unknown) {
+  return error instanceof PublishedVaultStorageError
+    && (error.supabaseCode === "PGRST204" || error.supabaseCode === "42703");
+}
+
+const MIGRATION_HINT = "Run supabase/schema.sql to add the publish_fee_tx column.";
 
 let loggedKeyAlias = false;
 
@@ -197,13 +208,14 @@ async function supabaseJson<T>(response: Response, stage: string): Promise<T> {
 
   if (!response.ok) {
     const code = getStatusCode(response.status);
+    const details = describeSupabaseError(value);
     console.error("[Published Vaults] Supabase request failed:", {
       stage,
       code,
       status: response.status,
-      ...describeSupabaseError(value),
+      ...details,
     });
-    throw new PublishedVaultStorageError(code, stage, response.status);
+    throw new PublishedVaultStorageError(code, stage, response.status, details.supabaseCode);
   }
   return value as T;
 }
@@ -440,6 +452,8 @@ export async function createPublishedVault(input: {
   publisherAddress: string;
   payoutAddress: string;
   dataset: string;
+  /** Verified publishing-fee transaction; recorded so it can't be reused. */
+  publishFeeTxHash?: string | null;
 }): Promise<MarketplaceVault> {
   const title = input.title.trim();
   const description = input.description.trim();
@@ -460,6 +474,10 @@ export async function createPublishedVault(input: {
 
   const prepared = prepareDataset(dataset);
   const config = getSupabaseConfig();
+  const publishFeeTxHash = input.publishFeeTxHash?.trim() || null;
+  if (publishFeeTxHash && await isPublishFeeUsed(config, publishFeeTxHash)) {
+    throw new PublishFeeAlreadyUsedError();
+  }
   const fileReference = `${randomUUID()}.json`;
   console.info("[Published Vaults] Publishing vault:", {
     stage: "dataset-upload",
@@ -472,8 +490,8 @@ export async function createPublishedVault(input: {
     select: VAULT_COLUMNS,
   });
   const recordInput = { title, description, priceNear, publisherAddress, payoutAddress, fileReference };
-  try {
-    const metadataResponse = await supabaseFetch(databaseUrl(config, query), {
+  const insertRow = async (includeFeeTx: boolean) => {
+    const response = await supabaseFetch(databaseUrl(config, query), {
       method: "POST",
       headers: supabaseHeaders(config, {
         "Content-Type": "application/json",
@@ -486,9 +504,25 @@ export async function createPublishedVault(input: {
         publisher_address: publisherAddress,
         payout_address: payoutAddress,
         file_reference: fileReference,
+        ...(includeFeeTx && publishFeeTxHash ? { publish_fee_tx: publishFeeTxHash } : {}),
       }),
     }, "vault-insert");
-    const rows = await supabaseJson<unknown>(metadataResponse, "vault-insert");
+    return supabaseJson<unknown>(response, "vault-insert");
+  };
+  try {
+    let rows: unknown;
+    try {
+      rows = await insertRow(true);
+    } catch (insertError) {
+      // Before the migration runs, keep publishing working without recording
+      // the fee transaction (the fee itself was already verified on-chain).
+      if (!publishFeeTxHash || !isMissingColumnError(insertError)) throw insertError;
+      console.warn("[Published Vaults] publish_fee_tx column missing; saving without it.", {
+        stage: "vault-insert",
+        hint: MIGRATION_HINT,
+      });
+      rows = await insertRow(false);
+    }
     const record = Array.isArray(rows) ? mapSupabaseVault(rows[0]) : null;
     if (!record) {
       console.error("[Published Vaults] Inserted row could not be read back.", {
@@ -505,6 +539,81 @@ export async function createPublishedVault(input: {
     if (existing && matchesPublishedInput(existing, recordInput)) {
       return toPublishedVaultListing({ ...existing, rowCount: prepared.rowCount });
     }
+    // 409 = the unique index on publish_fee_tx caught a concurrent reuse.
+    if (error instanceof PublishedVaultStorageError && error.status === 409 && publishFeeTxHash) {
+      throw new PublishFeeAlreadyUsedError();
+    }
     throw error;
+  }
+}
+
+export class PublishFeeAlreadyUsedError extends Error {
+  constructor() {
+    super("This publishing fee has already been used for another vault.");
+    this.name = "PublishFeeAlreadyUsedError";
+  }
+}
+
+async function isPublishFeeUsed(config: SupabaseConfig, txHash: string): Promise<boolean> {
+  const query = new URLSearchParams({ select: "id", publish_fee_tx: `eq.${txHash}`, limit: "1" });
+  const response = await supabaseFetch(databaseUrl(config, query), {
+    headers: supabaseHeaders(config),
+  }, "publish-fee-check");
+  try {
+    const rows = await supabaseJson<unknown>(response, "publish-fee-check");
+    return Array.isArray(rows) && rows.length > 0;
+  } catch (error) {
+    if (!isMissingColumnError(error)) throw error;
+    console.warn("[Published Vaults] Can't check publishing-fee reuse yet.", {
+      stage: "publish-fee-check",
+      hint: MIGRATION_HINT,
+    });
+    return false;
+  }
+}
+
+/**
+ * Removes a published vault: metadata first, so it leaves the marketplace
+ * immediately, then the encrypted dataset file (best effort).
+ */
+export async function deletePublishedVault(record: PublishedVaultRecord): Promise<void> {
+  const config = getSupabaseConfig();
+  const query = new URLSearchParams({
+    id: `eq.${record.id}`,
+    publisher_address: `eq.${record.publisherAddress}`,
+    select: "id",
+  });
+  const response = await supabaseFetch(databaseUrl(config, query), {
+    method: "DELETE",
+    headers: supabaseHeaders(config, { Prefer: "return=representation" }),
+  }, "vault-delete");
+  const rows = await supabaseJson<unknown>(response, "vault-delete");
+
+  if (!Array.isArray(rows) || rows.length === 0) {
+    // Row-level security turns a disallowed DELETE into "0 rows deleted"
+    // rather than an error, so check whether the row is really gone.
+    const stillListed = await getPublishedVault(record.id);
+    if (stillListed) {
+      console.error("[Published Vaults] Supabase did not delete the vault row.", {
+        stage: "vault-delete",
+        code: "SUPABASE_DELETE_BLOCKED",
+        hint: "Run supabase/schema.sql to add the delete grant and policy for anon.",
+      });
+      throw new PublishedVaultStorageError("SUPABASE_DELETE_BLOCKED", "vault-delete");
+    }
+  }
+  console.info("[Published Vaults] Vault metadata deleted.", { stage: "vault-delete", id: record.id });
+
+  try {
+    const fileResponse = await supabaseFetch(storageObjectUrl(config, record.fileRef), {
+      method: "DELETE",
+      headers: supabaseHeaders(config),
+    }, "dataset-delete");
+    await supabaseJson<unknown>(fileResponse, "dataset-delete");
+    console.info("[Published Vaults] Encrypted dataset deleted.", { stage: "dataset-delete" });
+  } catch {
+    // The vault is already unlisted and unqueryable; an orphaned encrypted
+    // file is harmless, so don't fail the unpublish over it.
+    console.warn("[Published Vaults] Encrypted dataset could not be deleted.", { stage: "dataset-delete" });
   }
 }

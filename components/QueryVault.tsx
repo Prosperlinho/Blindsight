@@ -10,11 +10,13 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
-import { Search, X } from "lucide-react";
+import { Search, Trash2, X } from "lucide-react";
 import { WalletContext } from "@/components/WalletProvider";
 import { DEMO_VAULTS, type MarketplaceVault } from "@/lib/demoVaults";
 import { isValidNearAccountId } from "@/lib/nearAccount";
-import { extractTransactionHash, transferNear } from "@/lib/near-transfers";
+import { buildUnpublishMessage, OWNERSHIP_NONCE_BYTES, OWNERSHIP_RECIPIENT } from "@/lib/vaultOwnership";
+import { extractTransactionHash, transferNear, transferNearBatch, type NearTransferRequest } from "@/lib/near-transfers";
+import { addNearAmounts, getPlatformTreasury, getPublishFeeNear, getQueryFeeNear, isFeeEnabled } from "@/lib/platformFees";
 import type { WalletActivityDraft } from "@/lib/walletActivity";
 
 type QueryVaultProps = {
@@ -41,7 +43,13 @@ type QueryExecution = {
   submittedQuery: string;
   payerAccountId: string;
   txHash: string;
+  /** Platform-fee transfer, when the query fee is enabled. */
+  feeTxHash?: string;
 };
+
+const QUERY_FEE_NEAR = getQueryFeeNear();
+const PUBLISH_FEE_NEAR = getPublishFeeNear();
+const PLATFORM_TREASURY = getPlatformTreasury();
 
 /** A user-facing query failure. `canRetry` means the payment can be reused. */
 class QueryError extends Error {
@@ -87,6 +95,7 @@ function toPaymentErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message.toLowerCase() : "";
   if (/reject|cancel|denied|closed|declin/.test(message)) return "Payment cancelled. You weren't charged.";
   if (/insufficient|not enough|balance/.test(message)) return "Not enough NEAR in your wallet for this question.";
+  if (/did not return/.test(message)) return "We couldn't confirm your payment. Check your wallet activity before trying again.";
   return "The payment didn't go through. You weren't charged.";
 }
 
@@ -289,6 +298,10 @@ export default function QueryVault({
   const [isDragging, setIsDragging] = useState(false);
   const [draftNotice, setDraftNotice] = useState("");
   const [vaultSearch, setVaultSearch] = useState("");
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [paidPublishFee, setPaidPublishFee] = useState<{ accountId: string; txHash: string } | null>(null);
+  const [confirmEjectId, setConfirmEjectId] = useState<string | null>(null);
+  const [ejectingId, setEjectingId] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const runIdRef = useRef(0);
@@ -337,6 +350,7 @@ export default function QueryVault({
   }, [stage]);
 
   const selectedVault = vaults.find((vault) => vault.id === selectedVaultId) ?? vaults[0];
+  const selectedQueryTotal = selectedVault ? addNearAmounts(selectedVault.priceNear, QUERY_FEE_NEAR) : "0";
   const searchTerms = vaultSearch.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const filteredVaults = searchTerms.length === 0
     ? vaults
@@ -348,6 +362,7 @@ export default function QueryVault({
     vault.source === "session"
     || (vault.source === "published" && vault.publisherAddress === walletAccountId)
   ));
+  const hasPaidPublishFee = Boolean(walletAccountId) && paidPublishFee?.accountId === walletAccountId;
   const parsedPrice = Number(draftPrice);
   const providerAddressValid = isValidNearAccountId(providerAddress);
   const canPublish = draftFiles.length > 0
@@ -387,6 +402,7 @@ export default function QueryVault({
     const payload: Record<string, unknown> = {
       query: execution.submittedQuery,
       txHash: execution.txHash,
+      feeTxHash: execution.feeTxHash,
       payerAccountId: execution.payerAccountId,
       queryPrice: vault.priceNear,
     };
@@ -500,11 +516,21 @@ export default function QueryVault({
     setRetryContext(null);
     setErrorMessage(null);
 
+    // The vault price goes to the publisher and the platform fee to the
+    // treasury: two transfers, approved together in one wallet prompt.
+    const transfers: NearTransferRequest[] = [
+      { receiverId: vault.seller || treasuryAccount, amountNear: vault.priceNear },
+    ];
+    if (isFeeEnabled(QUERY_FEE_NEAR)) {
+      transfers.push({ receiverId: PLATFORM_TREASURY, amountNear: QUERY_FEE_NEAR });
+    }
+
     let txHash: string | null = null;
+    let feeTxHash: string | undefined;
     try {
-      const receiver = vault.seller || treasuryAccount;
-      const transferResult = await transferNear(walletContext, receiver, vault.priceNear);
-      txHash = extractTransactionHash(transferResult) ?? null;
+      const hashes = await transferNearBatch(walletContext, transfers);
+      txHash = hashes[0] ?? null;
+      feeTxHash = hashes[1];
     } catch (error) {
       failQuery(runId, toPaymentErrorMessage(error));
       return;
@@ -518,7 +544,7 @@ export default function QueryVault({
 
     onQueryPayment({
       kind: "query",
-      amountNear: vault.priceNear,
+      amountNear: addNearAmounts(...transfers.map((transfer) => transfer.amountNear)),
       title: vault.title,
       txHash,
     });
@@ -528,6 +554,7 @@ export default function QueryVault({
       submittedQuery,
       payerAccountId: walletAccountId,
       txHash,
+      feeTxHash,
     }, runId);
   }
 
@@ -538,17 +565,86 @@ export default function QueryVault({
     await runExecution(retryContext, runId);
   }
 
-  function handleUnpublish(vaultId: string) {
-    const vault = vaults.find((entry) => entry.id === vaultId);
-    if (!vault || vault.source !== "session") return;
-
-    const remaining = vaults.filter((entry) => entry.id !== vaultId);
+  function removeVaultFromList(vault: MarketplaceVault, message: string) {
+    const remaining = vaults.filter((entry) => entry.id !== vault.id);
     setVaults(remaining);
-    setNotification(`"${vault.title}" was removed.`);
+    setNotification(message);
+    setConfirmEjectId(null);
 
-    if (selectedVaultId === vaultId) {
+    if (selectedVaultId === vault.id) {
       setSelectedVaultId(remaining[0]?.id ?? "");
       resetQueryState();
+    }
+  }
+
+  function canEject(vault: MarketplaceVault) {
+    return vault.source === "session"
+      || (vault.source === "published" && Boolean(walletAccountId) && vault.publisherAddress === walletAccountId);
+  }
+
+  async function handleEject(vaultId: string) {
+    const vault = vaults.find((entry) => entry.id === vaultId);
+    if (!vault || !canEject(vault) || ejectingId) return;
+
+    if (vault.source === "session") {
+      removeVaultFromList(vault, `"${vault.title}" was removed.`);
+      return;
+    }
+
+    const wallet = walletContext?.wallet;
+    if (!walletAccountId || !wallet) {
+      setNotification("Connect the wallet that published this vault.");
+      return;
+    }
+    if (typeof wallet.signMessage !== "function") {
+      setNotification("Your wallet can't confirm ownership. Try MyNearWallet or Meteor.");
+      return;
+    }
+
+    setEjectingId(vault.id);
+    try {
+      // Prove ownership with a free, off-chain NEP-413 signature (no transaction).
+      const nonce = window.crypto.getRandomValues(new Uint8Array(OWNERSHIP_NONCE_BYTES));
+      const message = buildUnpublishMessage(vault.id, new Date().toISOString());
+      let signed: Awaited<ReturnType<NonNullable<typeof wallet.signMessage>>>;
+      try {
+        signed = await wallet.signMessage({
+          message,
+          recipient: OWNERSHIP_RECIPIENT,
+          // Wallet Selector types this as Buffer; wallets accept any byte array.
+          nonce: nonce as unknown as Buffer,
+        });
+      } catch {
+        setNotification("Unpublish cancelled. Your vault is still live.");
+        return;
+      }
+      if (!signed?.signature || !signed.publicKey) {
+        setNotification("Unpublish cancelled. Your vault is still live.");
+        return;
+      }
+
+      const response = await fetch("/api/vaults", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          vaultId: vault.id,
+          accountId: signed.accountId || walletAccountId,
+          publicKey: signed.publicKey,
+          signature: signed.signature,
+          nonce: window.btoa(String.fromCharCode(...nonce)),
+          message,
+        }),
+      });
+      if (response.ok || response.status === 404) {
+        removeVaultFromList(vault, `"${vault.title}" was unpublished.`);
+        return;
+      }
+      const result = await response.json().catch(() => ({})) as { error?: string };
+      setNotification(result.error || "Couldn't unpublish this vault. Please try again.");
+    } catch {
+      setNotification("Couldn't unpublish this vault. Please try again.");
+    } finally {
+      setEjectingId(null);
     }
   }
 
@@ -632,6 +728,48 @@ export default function QueryVault({
       return;
     }
 
+    if (isPublishing) return;
+    setIsPublishing(true);
+    try {
+      await publishVault(walletAccountId, seller);
+    } finally {
+      setIsPublishing(false);
+    }
+  }
+
+  async function publishVault(publisherAddress: string, seller: string) {
+    // One-time publishing fee, paid before the vault is saved. If saving fails
+    // afterwards, the paid fee is kept so a retry doesn't charge again.
+    let publishFeeTxHash: string | undefined;
+    if (isFeeEnabled(PUBLISH_FEE_NEAR)) {
+      if (paidPublishFee?.accountId === publisherAddress) {
+        publishFeeTxHash = paidPublishFee.txHash;
+      } else {
+        if (!walletContext?.wallet) {
+          setNotification("Connect your wallet to publish.");
+          return;
+        }
+        try {
+          const result = await transferNear(walletContext, PLATFORM_TREASURY, PUBLISH_FEE_NEAR);
+          publishFeeTxHash = extractTransactionHash(result);
+        } catch (error) {
+          const message = error instanceof Error ? error.message.toLowerCase() : "";
+          setNotification(
+            /insufficient|not enough|balance/.test(message)
+              ? "Not enough NEAR in your wallet for the publishing fee."
+              : "Publishing cancelled. You weren't charged.",
+          );
+          return;
+        }
+        if (!publishFeeTxHash) {
+          setNotification("We couldn't confirm the publishing fee. Check your wallet activity before trying again.");
+          return;
+        }
+        setPaidPublishFee({ accountId: publisherAddress, txHash: publishFeeTxHash });
+        onQueryPayment({ kind: "send", amountNear: PUBLISH_FEE_NEAR, title: "Publishing fee", txHash: publishFeeTxHash });
+      }
+    }
+
     const title = draftTitle.trim();
     const dataset = draftFiles.map((file) => `### ${file.name}\n${file.content}`).join("\n\n");
     let publishedVault: MarketplaceVault;
@@ -643,21 +781,36 @@ export default function QueryVault({
           title,
           description: draftDescription.trim() || "Published through BlindSight.",
           priceNear: normalizePrice(draftPrice),
-          publisherAddress: walletAccountId,
+          publisherAddress,
           payoutAddress: seller,
           dataset,
+          publishFeeTxHash,
         }),
       });
-      const result = await response.json() as { vault?: MarketplaceVault; error?: string };
+      const result = await response.json() as { vault?: MarketplaceVault; error?: string; code?: string };
       if (!response.ok || !result.vault) {
-        setNotification(result.error || "Couldn't publish this vault. Please try again.");
+        // A fee that can never be accepted shouldn't be offered for reuse.
+        if (result.code === "PUBLISH_FEE_ALREADY_USED" || result.code === "PUBLISH_FEE_WRONG_PAYER") {
+          setPaidPublishFee(null);
+        }
+        setNotification(
+          publishFeeTxHash && result.code !== "PUBLISH_FEE_ALREADY_USED"
+            ? `${result.error || "Couldn't publish this vault."} Your publishing fee is saved, so trying again won't charge you twice.`
+            : result.error || "Couldn't publish this vault. Please try again.",
+        );
         return;
       }
       publishedVault = result.vault;
     } catch {
-      setNotification("Couldn't publish this vault. Please try again.");
+      setNotification(
+        publishFeeTxHash
+          ? "Couldn't publish this vault. Your publishing fee is saved, so trying again won't charge you twice."
+          : "Couldn't publish this vault. Please try again.",
+      );
       return;
     }
+
+    setPaidPublishFee(null);
 
     setVaults((current) => [publishedVault, ...current.filter((vault) => vault.id !== publishedVault.id)]);
     setSelectedVaultId(publishedVault.id);
@@ -738,17 +891,35 @@ export default function QueryVault({
                     </button>
                   ))}
                 </div>
-                <button
-                  type="submit"
-                  disabled={!query.trim() || isExecuting}
-                  className={`${PRIMARY_BUTTON} mt-1 w-full sm:w-auto sm:justify-self-end`}
-                >
-                  {stage === "paying"
-                    ? "Continue in wallet…"
-                    : stage === "answering"
-                      ? "Getting your answer…"
-                      : `Pay ${selectedVault.priceNear} NEAR & Ask`}
-                </button>
+                <div className="mt-1 flex flex-col gap-3 border-t border-white/10 pt-3 sm:flex-row sm:items-end sm:justify-between">
+                  <dl aria-label="Price breakdown" className="grid gap-1 text-xs sm:min-w-56">
+                    <div className="flex justify-between gap-6 text-slate-400">
+                      <dt>Vault price</dt>
+                      <dd className="text-slate-200">{selectedVault.priceNear} NEAR</dd>
+                    </div>
+                    {isFeeEnabled(QUERY_FEE_NEAR) && (
+                      <div className="flex justify-between gap-6 text-slate-400">
+                        <dt>Platform fee</dt>
+                        <dd className="text-slate-200">{QUERY_FEE_NEAR} NEAR</dd>
+                      </div>
+                    )}
+                    <div className="flex justify-between gap-6 border-t border-white/10 pt-1 text-sm font-medium text-white">
+                      <dt>Total</dt>
+                      <dd>{selectedQueryTotal} NEAR</dd>
+                    </div>
+                  </dl>
+                  <button
+                    type="submit"
+                    disabled={!query.trim() || isExecuting}
+                    className={`${PRIMARY_BUTTON} w-full sm:w-auto`}
+                  >
+                    {stage === "paying"
+                      ? "Continue in wallet…"
+                      : stage === "answering"
+                        ? "Getting your answer…"
+                        : `Pay ${selectedQueryTotal} NEAR & Ask`}
+                  </button>
+                </div>
               </form>
 
               {(stage === "answering" || answer || errorMessage) && (
@@ -1022,8 +1193,26 @@ export default function QueryVault({
               )}
             </label>
 
-            <button type="submit" disabled={!canPublish} className={`${PRIMARY_BUTTON} w-full`}>
-              Publish
+            {isFeeEnabled(PUBLISH_FEE_NEAR) && (
+              <div className="flex items-start justify-between gap-4 rounded-xl border border-white/10 bg-white/[0.03] px-3.5 py-3">
+                <div>
+                  <p className="text-sm font-medium text-white">Publishing fee</p>
+                  <p className="mt-0.5 text-xs leading-5 text-slate-400">
+                    {hasPaidPublishFee
+                      ? "Already paid. Finish publishing at no extra cost."
+                      : "One-time, paid to BlindSight when your vault goes live."}
+                  </p>
+                </div>
+                <span className="shrink-0 text-sm font-medium text-white">{PUBLISH_FEE_NEAR} NEAR</span>
+              </div>
+            )}
+
+            <button type="submit" disabled={!canPublish || isPublishing} className={`${PRIMARY_BUTTON} w-full`}>
+              {isPublishing
+                ? "Publishing…"
+                : isFeeEnabled(PUBLISH_FEE_NEAR) && !hasPaidPublishFee
+                  ? `Pay ${PUBLISH_FEE_NEAR} NEAR & Publish`
+                  : "Publish"}
             </button>
           </form>
 
@@ -1031,24 +1220,70 @@ export default function QueryVault({
             <div className={PANEL}>
               <h3 className="border-b border-white/10 px-4 py-3 text-sm font-medium text-white">Your vaults</h3>
               <ul className="divide-y divide-white/[0.06]">
-                {myVaults.map((vault) => (
-                  <li key={vault.id} className="flex items-center justify-between gap-3 px-4 py-3">
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-medium text-white">{vault.title}</div>
-                      <div className="mt-0.5 text-xs text-slate-500">{vault.priceNear} NEAR per question</div>
-                    </div>
-                    {vault.source === "session" && (
-                      <button
-                        type="button"
-                        onClick={() => handleUnpublish(vault.id)}
-                        className="min-h-11 shrink-0 px-2 text-xs text-slate-400 transition hover:text-rose-300"
-                        aria-label={`Remove ${vault.title}`}
-                      >
-                        Remove
-                      </button>
-                    )}
-                  </li>
-                ))}
+                {myVaults.map((vault) => {
+                  const isConfirming = confirmEjectId === vault.id;
+                  const isEjecting = ejectingId === vault.id;
+                  const actionLabel = vault.source === "published" ? "Unpublish" : "Remove";
+                  return (
+                    <li key={vault.id} className="px-4 py-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-medium text-white">{vault.title}</div>
+                          <div className="mt-0.5 text-xs text-slate-500">{vault.priceNear} NEAR per question</div>
+                        </div>
+                        {canEject(vault) && !isConfirming && (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmEjectId(vault.id)}
+                            disabled={Boolean(ejectingId)}
+                            className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-lg border border-white/10 px-3 text-xs font-medium text-slate-300 transition hover:border-rose-400/30 hover:bg-rose-500/[0.06] hover:text-rose-200 disabled:opacity-50"
+                            aria-label={`${actionLabel} ${vault.title}`}
+                          >
+                            <Trash2 aria-hidden="true" className="size-3.5" />
+                            {actionLabel}
+                          </button>
+                        )}
+                      </div>
+
+                      {isConfirming && (
+                        <div
+                          role="group"
+                          aria-label={`Confirm ${actionLabel.toLowerCase()}`}
+                          className="mt-3 rounded-xl border border-rose-400/20 bg-rose-500/[0.05] p-3"
+                        >
+                          <p className="text-sm leading-6 text-slate-200">
+                            {vault.source === "published"
+                              ? "Unpublish this vault? It will be removed from the marketplace and its data deleted. This can't be undone."
+                              : "Remove this vault from your list?"}
+                          </p>
+                          {vault.source === "published" && (
+                            <p className="mt-1 text-xs leading-5 text-slate-400">
+                              Your wallet will ask you to sign a message to confirm you own it. No fee is charged.
+                            </p>
+                          )}
+                          <div className="mt-3 flex justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setConfirmEjectId(null)}
+                              disabled={isEjecting}
+                              className="min-h-9 rounded-lg border border-white/10 px-3 text-xs font-medium text-slate-300 transition hover:bg-white/[0.06] disabled:opacity-50"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleEject(vault.id)}
+                              disabled={isEjecting}
+                              className="min-h-9 rounded-lg bg-rose-500/90 px-3 text-xs font-semibold text-white transition hover:bg-rose-500 disabled:opacity-60"
+                            >
+                              {isEjecting ? "Unpublishing…" : actionLabel}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           )}

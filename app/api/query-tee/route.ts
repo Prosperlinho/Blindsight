@@ -13,6 +13,7 @@ import { getDemoVault } from "@/lib/demoVaults";
 import { getDemoVaultDataset } from "@/lib/demoVaultDatasets";
 import { getPublishedVault, getPublishedVaultDataset } from "@/lib/publishedVaults";
 import { getTreasuryAccount, nearToYocto } from "@/lib/paymentConfig";
+import { feeToYocto, getPlatformTreasury, getQueryFeeNear, isFeeEnabled } from "@/lib/platformFees";
 import {
   PaymentVerificationError,
   verifyNearTransfer,
@@ -97,31 +98,37 @@ function getPaymentClaim(txHash: string) {
   return settledPayments.get(txHash) ?? null;
 }
 
-function markPaymentSettled(txHash: string) {
-  settledPayments.set(txHash, { status: "settled", timestamp: Date.now() });
+// Every transaction behind an answer (vault payment and platform fee) is
+// claimed together, so neither can be reused for another question.
+function markPaymentSettled(txHashes: string[]) {
+  for (const txHash of txHashes) settledPayments.set(txHash, { status: "settled", timestamp: Date.now() });
 }
 
-function claimPayment(txHash: string) {
-  const existingClaim = getPaymentClaim(txHash);
-  if (existingClaim?.status === "settled") {
-    throw new PaymentVerificationError(
-      "This payment has already been used for an answer.",
-      "PAYMENT_ALREADY_USED",
-      409,
-    );
+function claimPayment(txHashes: string[]) {
+  for (const txHash of txHashes) {
+    const existingClaim = getPaymentClaim(txHash);
+    if (existingClaim?.status === "settled") {
+      throw new PaymentVerificationError(
+        "This payment has already been used for an answer.",
+        "PAYMENT_ALREADY_USED",
+        409,
+      );
+    }
+    if (existingClaim?.status === "pending") {
+      throw new PaymentVerificationError(
+        "The answer for this payment is still being prepared. Please retry shortly.",
+        "PAYMENT_IN_PROGRESS",
+        409,
+      );
+    }
   }
-  if (existingClaim?.status === "pending") {
-    throw new PaymentVerificationError(
-      "The answer for this payment is still being prepared. Please retry shortly.",
-      "PAYMENT_IN_PROGRESS",
-      409,
-    );
-  }
-  settledPayments.set(txHash, { status: "pending", timestamp: Date.now() });
+  for (const txHash of txHashes) settledPayments.set(txHash, { status: "pending", timestamp: Date.now() });
 }
 
-function releasePaymentClaim(txHash: string) {
-  if (settledPayments.get(txHash)?.status === "pending") settledPayments.delete(txHash);
+function releasePaymentClaim(txHashes: string[]) {
+  for (const txHash of txHashes) {
+    if (settledPayments.get(txHash)?.status === "pending") settledPayments.delete(txHash);
+  }
 }
 
 /**
@@ -130,6 +137,7 @@ function releasePaymentClaim(txHash: string) {
  */
 type CachedVerifiedPayment = {
   payment: VerifiedNearPayment;
+  feeTxHash: string | null;
   queryHash: string;
   receiverId: string;
   expiresAt: number;
@@ -143,6 +151,7 @@ function getCachedVerifiedPayment(
   payerAccountId: string,
   minimumYocto: bigint,
   receiverId: string,
+  feeTxHash: string | null,
 ) {
   const key = `${txHash}:${payerAccountId}`;
   const cached = verifiedPayments.get(key);
@@ -151,7 +160,7 @@ function getCachedVerifiedPayment(
     verifiedPayments.delete(key);
     return null;
   }
-  if (cached.receiverId !== receiverId) return null;
+  if (cached.receiverId !== receiverId || cached.feeTxHash !== feeTxHash) return null;
   try {
     if (BigInt(cached.payment.amountYocto) < minimumYocto) return null;
   } catch {
@@ -164,6 +173,7 @@ function cacheVerifiedPayment(
   payment: VerifiedNearPayment,
   queryHash: string,
   receiverId: string,
+  feeTxHash: string | null,
 ) {
   if (verifiedPayments.size > 500) {
     const now = Date.now();
@@ -173,6 +183,7 @@ function cacheVerifiedPayment(
   }
   verifiedPayments.set(`${payment.txHash}:${payment.payerAccountId}`, {
     payment,
+    feeTxHash,
     queryHash,
     receiverId,
     expiresAt: Date.now() + VERIFIED_PAYMENT_TTL_MS,
@@ -481,7 +492,7 @@ type StreamInferenceArgs = {
   apiKey: string;
   messages: ChatCompletionMessageParam[];
   receiptId: string;
-  nearTxHash: string;
+  paymentHashes: string[];
   datasetId?: unknown;
 };
 
@@ -499,7 +510,7 @@ function streamInference({
   apiKey,
   messages,
   receiptId,
-  nearTxHash,
+  paymentHashes,
   datasetId,
 }: StreamInferenceArgs): Response {
   const encoder = new TextEncoder();
@@ -555,7 +566,7 @@ function streamInference({
         const insight = normalizeInsight(collected);
         if (!insight) throw new Error("The inference gateway returned no insight.");
 
-        markPaymentSettled(nearTxHash);
+        markPaymentSettled(paymentHashes);
 
         completed = true;
         send(controller, {
@@ -585,7 +596,7 @@ function streamInference({
         } catch {
           // The stream was already cancelled by the client.
         }
-        if (!completed) releasePaymentClaim(nearTxHash);
+        if (!completed) releasePaymentClaim(paymentHashes);
       }
     },
     cancel() {
@@ -639,6 +650,7 @@ export async function POST(req: NextRequest) {
     const {
       action,
       txHash: rawTxHash,
+      feeTxHash: rawFeeTxHash,
       payerAccountId,
       vaultId,
       query,
@@ -736,7 +748,25 @@ export async function POST(req: NextRequest) {
     const receiver = resolvedPublishedVault?.payoutAddress
       ?? resolvedVault?.seller
       ?? getTreasuryAccount();
-    const cachedPayment = getCachedVerifiedPayment(txHash, payer, minimumYocto, receiver);
+    // Platform fee: a separate transfer from the same payer to the platform
+    // treasury, on top of the vault price that goes to the publisher.
+    const queryFeeNear = getQueryFeeNear();
+    const feeRequired = isFeeEnabled(queryFeeNear);
+    const feeTxHash = feeRequired && typeof rawFeeTxHash === "string" ? rawFeeTxHash.trim() : "";
+    if (feeRequired && !feeTxHash) {
+      return errorResponse(402, "The platform fee payment is missing. Please try again.", {
+        code: "MISSING_FEE_TX",
+        paymentVerified: false,
+      });
+    }
+    if (feeRequired && feeTxHash === txHash) {
+      return errorResponse(400, "The platform fee must be a separate transfer.", {
+        code: "INVALID_FEE_TX",
+        paymentVerified: false,
+      });
+    }
+
+    const cachedPayment = getCachedVerifiedPayment(txHash, payer, minimumYocto, receiver, feeTxHash || null);
     if (cachedPayment) {
       if (queryHash && cachedPayment.queryHash && cachedPayment.queryHash !== queryHash) {
         return errorResponse(409, "This payment is already tied to a different question. Ask the original question again.", {
@@ -749,12 +779,32 @@ export async function POST(req: NextRequest) {
     } else {
       const verificationStartedAt = Date.now();
       try {
-        payment = await verifyNearTransfer({
-          txHash,
-          payerAccountId: payer,
-          expectedReceiver: receiver,
-          minimumYocto,
-        });
+        const [verifiedPayment] = await Promise.all([
+          verifyNearTransfer({
+            txHash,
+            payerAccountId: payer,
+            expectedReceiver: receiver,
+            minimumYocto,
+          }),
+          feeRequired
+            ? verifyNearTransfer({
+              txHash: feeTxHash,
+              payerAccountId: payer,
+              expectedReceiver: getPlatformTreasury(),
+              minimumYocto: feeToYocto(queryFeeNear),
+            }).catch((feeError: unknown) => {
+              if (feeError instanceof PaymentVerificationError) {
+                throw new PaymentVerificationError(
+                  `Platform fee: ${feeError.message}`,
+                  `FEE_${feeError.code}`,
+                  feeError.status,
+                );
+              }
+              throw feeError;
+            })
+            : Promise.resolve(null),
+        ]);
+        payment = verifiedPayment;
       } catch (verificationError) {
         if (verificationError instanceof PaymentVerificationError) {
           logQueryFailure("near-payment-verification", verificationError);
@@ -765,7 +815,7 @@ export async function POST(req: NextRequest) {
         }
         throw verificationError;
       }
-      cacheVerifiedPayment(payment, queryHash, receiver);
+      cacheVerifiedPayment(payment, queryHash, receiver, feeTxHash || null);
       console.info("[Query] Payment verified.", {
         stage: "near-payment-verification",
         ms: Date.now() - verificationStartedAt,
@@ -900,9 +950,9 @@ export async function POST(req: NextRequest) {
       { role: "user", content: `Dataset context:\n${dataset}\n\nResearch query:\n${submittedQuery}` },
     ];
 
-    const nearTxHash = payment.txHash;
+    const paymentHashes = feeTxHash ? [payment.txHash, feeTxHash] : [payment.txHash];
     try {
-      claimPayment(nearTxHash);
+      claimPayment(paymentHashes);
     } catch (claimError) {
       if (claimError instanceof PaymentVerificationError) {
         console.warn("[Query] Payment claim rejected:", { stage: "payment-claim", code: claimError.code });
@@ -921,7 +971,7 @@ export async function POST(req: NextRequest) {
         apiKey,
         messages,
         receiptId,
-        nearTxHash,
+        paymentHashes,
         datasetId,
       });
       return response;
@@ -995,12 +1045,12 @@ export async function POST(req: NextRequest) {
         receiptId,
         payment,
       });
-      markPaymentSettled(nearTxHash);
+      markPaymentSettled(paymentHashes);
       return response;
     } catch (err) {
       // The payment was valid but inference failed, so release the claim and
       // let the buyer retry with the same transfer instead of paying twice.
-      releasePaymentClaim(nearTxHash);
+      releasePaymentClaim(paymentHashes);
       const credentialFailure = getInferenceCredentialFailure(err);
       if (credentialFailure) {
         logInferenceFailure("inference-authentication", err, apiKey);

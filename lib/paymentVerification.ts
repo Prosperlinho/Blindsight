@@ -323,7 +323,7 @@ export async function verifyNearTransfer(
       const blockTimeMs = timestampToMs(block.header?.timestamp);
       if (blockTimeMs !== null && Date.now() - blockTimeMs > PAYMENT_MAX_AGE_MS) {
         throw new PaymentVerificationError(
-          "This payment transaction is too old to authorise a new query.",
+          "This payment is too old to use. Please make a new payment.",
           "STALE_PAYMENT",
           402,
         );

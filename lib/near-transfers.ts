@@ -53,6 +53,9 @@ type WalletSelectorWalletLike = {
     receiverId: string;
     actions: never;
   }) => Promise<TransactionResponse>;
+  signAndSendTransactions?: (args: {
+    transactions: { receiverId: string; actions: never }[];
+  }) => Promise<unknown>;
 };
 
 /**
@@ -174,4 +177,63 @@ export async function transferNear(
   }
 
   throw new Error("The connected wallet account cannot send NEAR transfers.");
+}
+
+export type NearTransferRequest = {
+  receiverId: string;
+  amountNear: string;
+};
+
+function toTransferAction(amountNear: string): Action {
+  const amountInYocto = parseNearAmount(amountNear as `${number}`);
+  if (!amountInYocto || BigInt(amountInYocto) <= BigInt(0)) {
+    throw new Error("The NEAR amount is invalid.");
+  }
+  return actions.transfer(BigInt(amountInYocto));
+}
+
+/**
+ * Sends several native NEAR transfers, e.g. a vault price to its publisher and
+ * a platform fee to the treasury. Wallets that support batching approve them
+ * all in one prompt; others fall back to one prompt per transfer.
+ *
+ * Returns the transaction hashes in the same order as `transfers`.
+ */
+export async function transferNearBatch(
+  walletContext: WalletSelectorContextLike,
+  transfers: NearTransferRequest[],
+): Promise<string[]> {
+  const { wallet, accountId } = walletContext;
+  if (!wallet || !accountId) {
+    throw new Error("Connect a NEAR wallet to sign the on-chain payment.");
+  }
+  for (const transfer of transfers) {
+    if (!isValidNearAccountId(transfer.receiverId.trim())) {
+      throw new Error("The receiver is not a valid NEAR testnet account ID.");
+    }
+  }
+
+  if (transfers.length > 1 && typeof wallet.signAndSendTransactions === "function") {
+    const outcomes = await wallet.signAndSendTransactions({
+      transactions: transfers.map((transfer) => ({
+        receiverId: transfer.receiverId.trim(),
+        // Same structural cast as resolveAccount(): separate @near-js bundles.
+        actions: [toTransferAction(transfer.amountNear)] as never,
+      })),
+    });
+    const hashes = Array.isArray(outcomes) ? outcomes.map(extractTransactionHash) : [];
+    if (hashes.length !== transfers.length || hashes.some((hash) => !hash)) {
+      throw new Error("The wallet did not return every transaction. Check your wallet activity.");
+    }
+    return hashes as string[];
+  }
+
+  const hashes: string[] = [];
+  for (const transfer of transfers) {
+    const result = await transferNear(walletContext, transfer.receiverId, transfer.amountNear);
+    const hash = extractTransactionHash(result);
+    if (!hash) throw new Error("The wallet did not return a transaction. Check your wallet activity.");
+    hashes.push(hash);
+  }
+  return hashes;
 }
