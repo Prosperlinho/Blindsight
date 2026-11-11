@@ -4,8 +4,8 @@ import "./globals.css";
 import WalletProvider from "@/components/WalletProvider";
 
 export const metadata: Metadata = {
-  title: "BlindSight | Private data insights",
-  description: "Ask questions about private data and pay only for the insights you need.",
+  title: "BlindSight | Confidential data marketplace",
+  description: "A marketplace of private data vaults. Owners set a price per question; buyers pay in NEAR for insights while the source data stays private.",
 };
 
 export const viewport: Viewport = {

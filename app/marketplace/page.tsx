@@ -8,7 +8,8 @@ import QueryVault, { VAULT_TABS, type VaultTab } from "@/components/QueryVault";
 import { useWallet } from "@/components/WalletProvider";
 import { fetchNearBalance, isValidNearAccountId, type NearAccountBalance } from "@/lib/nearAccount";
 import { extractTransactionHash, transferNear } from "@/lib/near-transfers";
-import { getTransactionExplorerUrl, getTreasuryAccount, yoctoToNearAmount } from "@/lib/paymentConfig";
+import { ExternalLink, LogOut } from "lucide-react";
+import { getAccountExplorerUrl, getTransactionExplorerUrl, getTreasuryAccount, yoctoToNearAmount } from "@/lib/paymentConfig";
 import { getWalletActivity, recordWalletActivity, type WalletActivity, type WalletActivityDraft } from "@/lib/walletActivity";
 
 const ACTIVITY_LABELS: Record<WalletActivity["kind"], string> = {
@@ -242,13 +243,11 @@ export default function MarketplacePage() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-x-hidden text-slate-100">
+    <div className="relative min-h-screen overflow-x-clip text-slate-100">
       <header className="sticky top-0 z-40 border-b border-white/10 bg-slate-950/80 backdrop-blur-xl">
         <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 sm:px-6">
           <Link href="/" className="flex items-center gap-2.5" aria-label="BlindSight home">
-            <span className="grid size-9 place-items-center rounded-xl border border-cyan-400/30 bg-cyan-500/10">
-              <Image src="/logo.png" alt="" width={26} height={26} className="h-6 w-6 object-contain" priority />
-            </span>
+            <Image src="/logo-mark.png" alt="" width={32} height={32} className="size-8 object-contain" priority />
             <span className="text-sm font-semibold text-white">BlindSight</span>
           </Link>
 
@@ -295,8 +294,9 @@ export default function MarketplacePage() {
                 id="wallet-panel"
                 role="dialog"
                 aria-label="Wallet"
-                className="absolute right-0 top-full z-50 mt-2 max-h-[min(80vh,640px)] w-[min(360px,calc(100vw-32px))] overflow-y-auto rounded-2xl border border-white/10 bg-slate-950/95 shadow-[0_24px_80px_rgba(0,0,0,0.6)] backdrop-blur-xl"
+                className="absolute right-0 top-full z-50 mt-2 flex max-h-[min(calc(100svh-96px),640px)] w-[min(360px,calc(100vw-32px))] flex-col overflow-hidden rounded-2xl border border-white/10 bg-slate-950/95 shadow-[0_24px_80px_rgba(0,0,0,0.6)] backdrop-blur-xl"
               >
+                <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
                 <div className="p-4">
                   <p className="text-xs text-slate-400">Balance</p>
                   <p className="text-2xl font-semibold text-white">{balanceLabel}</p>
@@ -425,35 +425,35 @@ export default function MarketplacePage() {
                     <ul className="mt-1 divide-y divide-white/[0.06]">
                       {activeWalletActivity.slice(0, 10).map((activity) => {
                         const isIncoming = activity.kind === "deposit";
-                        const row = (
-                          <>
-                            <span className="min-w-0">
-                              <span className="block truncate text-sm text-slate-100">
-                                {ACTIVITY_LABELS[activity.kind]}
-                                {activity.kind !== "deposit" && <span className="text-slate-400"> · {activity.title}</span>}
-                              </span>
-                              <span className="block text-xs text-slate-500">{dateFormatter.format(activity.timestamp)}</span>
-                            </span>
-                            <span className={`shrink-0 text-sm ${isIncoming ? "text-emerald-300" : "text-slate-200"}`}>
-                              {isIncoming ? "+" : "−"}{activity.amountNear} NEAR
-                            </span>
-                          </>
-                        );
+                        // Deposits are detected from balance changes and have no
+                        // transaction hash, so they open the account's explorer page.
+                        const explorerUrl = activity.txHash
+                          ? getTransactionExplorerUrl(activity.txHash)
+                          : getAccountExplorerUrl(accountId);
                         return (
                           <li key={activity.id}>
-                            {activity.txHash ? (
-                              <a
-                                href={getTransactionExplorerUrl(activity.txHash)}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                title="View details"
-                                className="-mx-2 flex items-center justify-between gap-3 rounded-lg px-2 py-2.5 transition hover:bg-white/[0.04]"
-                              >
-                                {row}
-                              </a>
-                            ) : (
-                              <div className="flex items-center justify-between gap-3 py-2.5">{row}</div>
-                            )}
+                            <a
+                              href={explorerUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title={activity.txHash ? "View transaction on NearBlocks" : "View account activity on NearBlocks"}
+                              className="group -mx-2 flex items-center justify-between gap-3 rounded-lg px-2 py-2.5 transition hover:bg-white/[0.05] focus-visible:bg-white/[0.05]"
+                            >
+                              <span className="min-w-0">
+                                <span className="block truncate text-sm text-slate-100">
+                                  {ACTIVITY_LABELS[activity.kind]}
+                                  {activity.kind !== "deposit" && <span className="text-slate-400"> · {activity.title}</span>}
+                                </span>
+                                <span className="block text-xs text-slate-500">{dateFormatter.format(activity.timestamp)}</span>
+                              </span>
+                              <span className="flex shrink-0 items-center gap-2">
+                                <span className={`text-sm ${isIncoming ? "text-emerald-300" : "text-slate-200"}`}>
+                                  {isIncoming ? "+" : "−"}{activity.amountNear} NEAR
+                                </span>
+                                <ExternalLink aria-hidden="true" className="size-3.5 text-slate-500 transition group-hover:text-cyan-300" />
+                                <span className="sr-only">(opens in a new tab)</span>
+                              </span>
+                            </a>
                           </li>
                         );
                       })}
@@ -462,15 +462,17 @@ export default function MarketplacePage() {
                     <p className="py-2 text-sm text-slate-500">No transactions yet.</p>
                   )}
                 </section>
+                </div>
 
-                <div className="border-t border-white/10 p-3">
+                <div className="shrink-0 border-t border-white/10 bg-slate-950 p-3">
                   <button
                     type="button"
                     onClick={() => void handleWalletDisconnect()}
                     disabled={isSigningOut}
-                    className="min-h-10 w-full rounded-xl text-sm font-medium text-slate-400 transition hover:bg-white/[0.04] hover:text-rose-300 disabled:opacity-60"
+                    className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] text-sm font-medium text-slate-300 transition hover:border-rose-400/30 hover:bg-rose-500/[0.06] hover:text-rose-200 disabled:opacity-60"
                   >
-                    {isSigningOut ? "Disconnecting…" : "Disconnect"}
+                    <LogOut aria-hidden="true" className="size-4" />
+                    {isSigningOut ? "Disconnecting…" : "Disconnect wallet"}
                   </button>
                 </div>
               </div>

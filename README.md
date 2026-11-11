@@ -116,9 +116,9 @@ wallet.
 3. If the account has no testnet NEAR, open the [NEAR testnet faucet](https://near-faucet.io/) and
    fund it. This is an external prerequisite; the app itself has no faucet.
 4. Keep one of the preloaded sample vaults selected:
-  - **Q3 Financial & Market Demand** — 0.5 NEAR
-  - **Medical Research Cohort 2026** — 0.35 NEAR
-  - **Solidity Security Audit Report** — 0.8 NEAR
+  - **Q3 Financial & Market Demand** — 0.15 NEAR
+  - **Medical Research Cohort 2026** — 0.1 NEAR
+  - **Solidity Security Audit Report** — 0.2 NEAR
    **See:** the vault card shows the price, publisher, row count, and the treasury fee recipient.
 5. Ask a question, for example:
    - *Which segment has the highest year-over-year growth?*
@@ -148,7 +148,7 @@ vault fees continue to go to the treasury.
 
 The app sends `Cache-Control: no-store` for `/`, but an already-cached tab can still survive a
 deploy. Do a hard refresh (`Ctrl+Shift+R` / `Cmd+Shift+R`) or open the URL in a private window. The
-current build shows **Pay 0.5 NEAR & ask**, **Payment confirmed**, and **Answer ready**; it does not
+current build shows **Pay 0.15 NEAR & ask**, **Payment confirmed**, and **Answer ready**; it does not
 contain the old "simulated locally" copy.
 
 ---

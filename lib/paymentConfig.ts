@@ -46,8 +46,12 @@ export function getTreasuryAccount(): string {
   return DEFAULT_TREASURY_ACCOUNT;
 }
 
-export function getTreasuryExplorerUrl(accountId: string = getTreasuryAccount()): string {
+export function getAccountExplorerUrl(accountId: string): string {
   return `https://testnet.nearblocks.io/address/${encodeURIComponent(accountId)}`;
+}
+
+export function getTreasuryExplorerUrl(accountId: string = getTreasuryAccount()): string {
+  return getAccountExplorerUrl(accountId);
 }
 
 export function getTransactionExplorerUrl(transactionHash: string): string {

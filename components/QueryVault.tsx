@@ -10,6 +10,7 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
+import { Search, X } from "lucide-react";
 import { WalletContext } from "@/components/WalletProvider";
 import { DEMO_VAULTS, type MarketplaceVault } from "@/lib/demoVaults";
 import { isValidNearAccountId } from "@/lib/nearAccount";
@@ -287,6 +288,7 @@ export default function QueryVault({
   const [draftPrice, setDraftPrice] = useState("0.1");
   const [isDragging, setIsDragging] = useState(false);
   const [draftNotice, setDraftNotice] = useState("");
+  const [vaultSearch, setVaultSearch] = useState("");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const runIdRef = useRef(0);
@@ -335,6 +337,13 @@ export default function QueryVault({
   }, [stage]);
 
   const selectedVault = vaults.find((vault) => vault.id === selectedVaultId) ?? vaults[0];
+  const searchTerms = vaultSearch.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const filteredVaults = searchTerms.length === 0
+    ? vaults
+    : vaults.filter((vault) => {
+      const haystack = `${vault.title} ${vault.description}`.toLowerCase();
+      return searchTerms.every((term) => haystack.includes(term));
+    });
   const myVaults = vaults.filter((vault) => (
     vault.source === "session"
     || (vault.source === "published" && vault.publisherAddress === walletAccountId)
@@ -809,8 +818,43 @@ export default function QueryVault({
             <p className="mt-1 text-sm text-slate-400">Choose a vault to ask it a question.</p>
           </div>
 
+          <div className="relative">
+            <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-500" />
+            <input
+              type="search"
+              value={vaultSearch}
+              onChange={(event) => setVaultSearch(event.target.value)}
+              placeholder="Search vaults by title or description"
+              aria-label="Search vaults"
+              className={`${INPUT} pl-9 pr-9 [&::-webkit-search-cancel-button]:hidden`}
+            />
+            {vaultSearch && (
+              <button
+                type="button"
+                onClick={() => setVaultSearch("")}
+                aria-label="Clear search"
+                className="absolute right-2 top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded-md text-slate-400 transition hover:bg-white/[0.06] hover:text-white"
+              >
+                <X aria-hidden="true" className="size-4" />
+              </button>
+            )}
+          </div>
+
+          {filteredVaults.length === 0 && (
+            <div className={`${PANEL} px-4 py-8 text-center`}>
+              <p className="text-sm text-slate-300">No vaults match &ldquo;{vaultSearch.trim()}&rdquo;.</p>
+              <button
+                type="button"
+                onClick={() => setVaultSearch("")}
+                className="mt-2 text-sm font-medium text-cyan-300 transition hover:text-cyan-200"
+              >
+                Clear search
+              </button>
+            </div>
+          )}
+
           <div className="grid gap-3 sm:grid-cols-2">
-            {vaults.map((vault) => {
+            {filteredVaults.map((vault) => {
               const isSelected = vault.id === selectedVault?.id;
               return (
                 <button
