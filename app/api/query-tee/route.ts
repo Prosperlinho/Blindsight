@@ -12,6 +12,7 @@ import {
 import { getDemoVault } from "@/lib/demoVaults";
 import { getDemoVaultDataset } from "@/lib/demoVaultDatasets";
 import { getPublishedVault, getPublishedVaultDataset } from "@/lib/publishedVaults";
+import { prewarmAttestation, runPrivateCompletion, type PrivacyReceipt } from "@/lib/privateInference";
 import { getTreasuryAccount, nearToYocto } from "@/lib/paymentConfig";
 import { feeToYocto, getPlatformTreasury, getQueryFeeNear, isFeeEnabled } from "@/lib/platformFees";
 import {
@@ -30,6 +31,11 @@ const MAX_DATASET_LENGTH = 32_000;
 const MAX_QUERY_LENGTH = 2_000;
 const DATASET_TRUNCATION_NOTE = "[Dataset truncated to fit the inference context]";
 const INFERENCE_TIMEOUT_MS = 30_000;
+const ATTESTATION_WAIT_MS = 25_000;
+// Always leave at least this much of the budget for generating the answer.
+const MIN_ANSWER_BUDGET_MS = 20_000;
+// Signature checks must finish before the 60s function limit.
+const RESPONSE_DEADLINE_MS = 57_000;
 // Leave headroom under maxDuration (60s) for payment verification and the response.
 const INFERENCE_DEADLINE_MS = 52_000;
 const MIN_RETRY_BUDGET_MS = 12_000;
@@ -456,10 +462,12 @@ function successResponse({
   insight,
   receiptId,
   payment,
+  privacy = null,
 }: {
   insight: string;
   receiptId: string;
   payment: Record<string, unknown>;
+  privacy?: PrivacyReceipt | null;
 }) {
   // Privacy guardrail: only the generated insight and payment settlement
   // metadata leave the server. Dataset text, raw file buffers, file names,
@@ -484,6 +492,9 @@ function successResponse({
       verifiedAt: normalized.verifiedAt,
       explorerUrl: `https://testnet.nearblocks.io/txns/${normalized.txHash}`,
     },
+    // How the answer was produced: TEE attestation, encrypted transport and
+    // the enclave's signature over this exact question and answer.
+    privacy,
   });
 }
 
@@ -617,6 +628,9 @@ function streamInference({
 export async function POST(req: NextRequest) {
   const requestStartedAt = Date.now();
   let failureStage = "request";
+  // Start (or reuse) TEE attestation now so it runs alongside payment checks.
+  const prewarmKey = process.env.NEAR_AI_API_KEY?.trim();
+  if (prewarmKey) prewarmAttestation(prewarmKey, MODEL);
   try {
     // 1. Safely parse request body (JSON or multipart text-file upload)
     let parsedBody: unknown = {};
@@ -982,11 +996,15 @@ export async function POST(req: NextRequest) {
     let inferenceAttempts = 0;
     try {
       let generatedInsight = "";
+      let privacyReceipt: PrivacyReceipt | null = null;
 
       for (let attempt = 0; attempt < MAX_INFERENCE_ATTEMPTS; attempt += 1) {
         inferenceAttempts = attempt + 1;
         const remainingMs = INFERENCE_DEADLINE_MS - (Date.now() - requestStartedAt);
-        const attemptTimeoutMs = Math.min(INFERENCE_TIMEOUT_MS, remainingMs);
+        // Wait for TEE attestation only while enough budget remains for the
+        // answer itself; it is cached after the first verification.
+        const attestationWaitMs = Math.max(0, Math.min(ATTESTATION_WAIT_MS, remainingMs - MIN_ANSWER_BUDGET_MS));
+        const attemptTimeoutMs = Math.min(INFERENCE_TIMEOUT_MS + attestationWaitMs, remainingMs);
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), attemptTimeoutMs);
         const attemptStartedAt = Date.now();
@@ -997,21 +1015,39 @@ export async function POST(req: NextRequest) {
           promptChars: dataset.length + submittedQuery.length,
         });
         try {
-          const completion = await client.chat.completions.create({
+          const result = await runPrivateCompletion({
+            apiKey,
             model: MODEL,
-            messages,
-            max_tokens: INFERENCE_MAX_TOKENS,
-            temperature: 0.2,
-          }, { signal: controller.signal, maxRetries: 0 });
-
-          const choice = completion.choices[0];
+            requestBody: JSON.stringify({
+              model: MODEL,
+              messages,
+              max_tokens: INFERENCE_MAX_TOKENS,
+              temperature: 0.2,
+            }),
+            signal: controller.signal,
+            attestationWaitMs,
+            deadlineAt: requestStartedAt + RESPONSE_DEADLINE_MS,
+          });
+          if (result.status < 200 || result.status >= 300) {
+            throw Object.assign(new Error(`NEAR AI returned HTTP ${result.status}.`), { status: result.status });
+          }
+          const completion = JSON.parse(result.rawBody) as {
+            choices?: { message?: { content?: string | null }; finish_reason?: string }[];
+            usage?: { completion_tokens?: number };
+          };
+          const choice = completion.choices?.[0];
           generatedInsight = choice?.message?.content?.trim() ?? "";
+          privacyReceipt = result.receipt;
           console.info("[Query] Inference attempt finished:", {
             attempt: inferenceAttempts,
             ms: Date.now() - attemptStartedAt,
             finishReason: choice?.finish_reason,
             answerChars: generatedInsight.length,
             completionTokens: completion.usage?.completion_tokens,
+            attested: result.receipt.attested,
+            encryptedToEnclave: result.receipt.encryptedToEnclave,
+            responseSigned: result.receipt.responseSigned,
+            privacyNote: result.receipt.note,
           });
           if (!generatedInsight) {
             throw new Error(`The inference gateway returned no insight (finish_reason: ${choice?.finish_reason ?? "unknown"}).`);
@@ -1044,6 +1080,7 @@ export async function POST(req: NextRequest) {
         insight: generatedInsight,
         receiptId,
         payment,
+        privacy: privacyReceipt,
       });
       markPaymentSettled(paymentHashes);
       return response;

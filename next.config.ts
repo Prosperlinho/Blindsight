@@ -6,7 +6,7 @@ const nextConfig: NextConfig = {
   },
   cacheComponents: true,
   partialPrefetching: true,
-  serverExternalPackages: ["pdf-parse"],
+  serverExternalPackages: ["pdf-parse", "@phala/dcap-qvl"],
   typescript: {
     ignoreBuildErrors: true,
   },

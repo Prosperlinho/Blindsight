@@ -12,6 +12,7 @@ import {
 } from "react";
 import { Search, Trash2, X } from "lucide-react";
 import { WalletContext } from "@/components/WalletProvider";
+import PrivacyReceipt, { parsePrivacyReceipt, type PrivacyReceiptData } from "@/components/PrivacyReceipt";
 import { DEMO_VAULTS, type MarketplaceVault } from "@/lib/demoVaults";
 import { isValidNearAccountId } from "@/lib/nearAccount";
 import { buildUnpublishMessage, OWNERSHIP_NONCE_BYTES, OWNERSHIP_RECIPIENT } from "@/lib/vaultOwnership";
@@ -109,6 +110,7 @@ type DraftFile = {
 type VaultAnswer = {
   vaultTitle: string;
   insight: string;
+  privacy?: PrivacyReceiptData | null;
 };
 
 const PANEL = "rounded-2xl border border-white/10 bg-slate-900/70 backdrop-blur-xl";
@@ -444,6 +446,7 @@ export default function QueryVault({
 
     let insight = "";
     let receiptId: string | undefined;
+    let privacy: PrivacyReceiptData | null = null;
     if (response.headers.get("content-type")?.includes("text/event-stream")) {
       const streamed = await readStreamedAnswer(response, (partialInsight) => {
         if (runId === runIdRef.current) {
@@ -465,13 +468,14 @@ export default function QueryVault({
         : {};
       insight = typeof record.insight === "string" ? record.insight.trim() : "";
       receiptId = typeof record.receiptId === "string" ? record.receiptId : undefined;
+      privacy = parsePrivacyReceipt(record.privacy);
     }
 
     if (!insight || (receiptId && receiptId !== execution.txHash)) {
       throw new QueryError(ANSWER_RETRY_MESSAGE, true);
     }
 
-    setAnswer({ vaultTitle: vault.title, insight });
+    setAnswer({ vaultTitle: vault.title, insight, privacy });
     setStage("ready");
     setRetryContext(null);
   }
@@ -961,6 +965,7 @@ export default function QueryVault({
                       <div className="mt-5 max-w-prose space-y-4 break-words text-[15px] leading-7 text-slate-100 sm:text-base">
                         {renderInsight(answer.insight)}
                       </div>
+                      {stage === "ready" && answer.privacy && <PrivacyReceipt receipt={answer.privacy} />}
                     </article>
                   )}
                 </div>
