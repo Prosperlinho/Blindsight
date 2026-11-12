@@ -23,9 +23,9 @@ Hackathon write-up (Track 3, Privacy & Private AI): [HACKATHON.md](HACKATHON.md)
   - Next.js, React, `lucide-react`
   - NEAR Wallet Selector and `near-api-js`
   - `@phala/dcap-qvl` (Intel TDX quote verification)
-  - `@noble/*` (cryptography)
   - `openai` (an OpenAI-compatible client for NEAR AI Cloud)
-  - `pdf-parse`, `dotenv`
+  - `pdf-parse`
+  - HPKE, OHTTP and Binary HTTP are implemented directly on Node's built-in crypto
 - **AI assistance:** parts of the code and docs were written with AI coding assistants. The app
   started from the Create Next App template.
 - **License:** [MIT](LICENSE).
