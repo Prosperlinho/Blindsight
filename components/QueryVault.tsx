@@ -10,6 +10,7 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
+import { Buffer } from "buffer";
 import { Search, Trash2, X } from "lucide-react";
 import { WalletContext } from "@/components/WalletProvider";
 import PrivacyReceipt, { parsePrivacyReceipt, type PrivacyReceiptData } from "@/components/PrivacyReceipt";
@@ -616,8 +617,9 @@ export default function QueryVault({
         signed = await signMessageWithWallet(wallet, {
           message,
           recipient: OWNERSHIP_RECIPIENT,
-          // Wallet Selector types this as Buffer; wallets accept any byte array.
-          nonce: nonce as unknown as Buffer,
+          // Must be a real Buffer: Meteor's extension bridge JSON-serializes
+          // requests, which keeps a Buffer intact but mangles a Uint8Array.
+          nonce: Buffer.from(nonce),
         });
       } catch (error) {
         console.warn("[Unpublish] Wallet signature failed:", error);
