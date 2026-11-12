@@ -19,6 +19,7 @@ import { buildUnpublishMessage, OWNERSHIP_NONCE_BYTES, OWNERSHIP_RECIPIENT } fro
 import { extractTransactionHash, transferNear, transferNearBatch, type NearTransferRequest } from "@/lib/near-transfers";
 import { addNearAmounts, getPlatformTreasury, getPublishFeeNear, getQueryFeeNear, isFeeEnabled } from "@/lib/platformFees";
 import type { WalletActivityDraft } from "@/lib/walletActivity";
+import { isUserCancellation, signMessageWithWallet, type WalletSignature } from "@/lib/walletSignMessage";
 
 type QueryVaultProps = {
   providerAddress: string;
@@ -610,20 +611,22 @@ export default function QueryVault({
       // Prove ownership with a free, off-chain NEP-413 signature (no transaction).
       const nonce = window.crypto.getRandomValues(new Uint8Array(OWNERSHIP_NONCE_BYTES));
       const message = buildUnpublishMessage(vault.id, new Date().toISOString());
-      let signed: Awaited<ReturnType<NonNullable<typeof wallet.signMessage>>>;
+      let signed: WalletSignature;
       try {
-        signed = await wallet.signMessage({
+        signed = await signMessageWithWallet(wallet, {
           message,
           recipient: OWNERSHIP_RECIPIENT,
           // Wallet Selector types this as Buffer; wallets accept any byte array.
           nonce: nonce as unknown as Buffer,
         });
-      } catch {
-        setNotification("Unpublish cancelled. Your vault is still live.");
-        return;
-      }
-      if (!signed?.signature || !signed.publicKey) {
-        setNotification("Unpublish cancelled. Your vault is still live.");
+      } catch (error) {
+        console.warn("[Unpublish] Wallet signature failed:", error);
+        if (isUserCancellation(error)) {
+          setNotification("Unpublish cancelled. Your vault is still live.");
+        } else {
+          const reason = error instanceof Error && error.message ? ` (${error.message})` : "";
+          setNotification(`Your wallet couldn't confirm ownership${reason}. Your vault is still live.`);
+        }
         return;
       }
 
