@@ -11,6 +11,25 @@ question, encrypts the question to it, and shows a signed privacy receipt with t
 
 Hackathon write-up (Track 3, Privacy & Private AI): [HACKATHON.md](HACKATHON.md).
 
+### Built at NEAR HACKATHON
+
+- **Track:** 03, Privacy & Private AI. Built on NEAR AI Cloud private inference with TEE
+  verification.
+- **Built in the hackathon window.** The repository was created on 2026-10-26, after the
+  announcement on 2026-10-19, so there is no pre-hackathon baseline: every commit is hackathon work.
+- **Network:** NEAR testnet.
+- **Hosted demo:** live at the URL above and kept online through judging.
+- **Third-party code:** open-source libraries only, from `package.json`:
+  - Next.js, React, `lucide-react`
+  - NEAR Wallet Selector and `near-api-js`
+  - `@phala/dcap-qvl` (Intel TDX quote verification)
+  - `@noble/*` (cryptography)
+  - `openai` (an OpenAI-compatible client for NEAR AI Cloud)
+  - `pdf-parse`, `dotenv`
+- **AI assistance:** parts of the code and docs were written with AI coding assistants. The app
+  started from the Create Next App template.
+- **License:** [MIT](LICENSE).
+
 ---
 
 ## What's real
