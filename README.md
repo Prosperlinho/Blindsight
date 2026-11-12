@@ -2,154 +2,100 @@
 
 > Ask a question. Pay for the answer. Never hand over the dataset.
 
-BlindSight is a working hackathon prototype for a **paid private-data marketplace** on NEAR
-testnet. A buyer connects a real NEAR wallet, selects a sample dataset, asks a natural-language
-question, and signs a **real native NEAR transfer** for the query fee. The server verifies that
-transfer against the public NEAR RPC before it calls an AI model, and the browser only renders the
-answer after verification succeeds.
+BlindSight is a confidential data marketplace on NEAR testnet. Publishers list datasets in sealed
+vaults. Buyers pay in NEAR to ask a question and get an AI answer, never the raw records. The AI
+runs in an attested hardware enclave on NEAR AI Cloud. BlindSight verifies that enclave on every
+question, encrypts the question to it, and shows a signed privacy receipt with the answer.
 
 **Live app:** [https://blindsight-zeta.vercel.app/](https://blindsight-zeta.vercel.app/)
 
-The dataset rows stay on the server. The browser receives vault metadata and a `vaultId`; it never
-receives the sample records that are used for inference.
+Hackathon write-up (Track 3, Privacy & Private AI): [HACKATHON.md](HACKATHON.md).
 
 ---
 
-## Real vs prototype (honest disclosure)
+## What's real
 
-BlindSight is deliberately explicit about which parts are real, because a judge should be able to
-verify the payment and the answer independently.
+| Area | What actually happens |
+| --- | --- |
+| Wallet connection | NEAR Wallet Selector with MyNearWallet and Meteor on `testnet`. |
+| Account balance | Read from the public FastNear testnet RPC (`view_account`). |
+| Query payment | One approval, two native NEAR transfers: the vault price to the publisher's payout account (or the treasury for sample vaults), plus a 0.01 NEAR platform fee to the treasury. |
+| Payment verification | The server fetches both finalized transactions from `https://rpc.testnet.fastnear.com`. It checks signer, receiver, amount, execution status and age before inference. |
+| Private inference | `deepseek/deepseek-v3.2` on NEAR AI Cloud, running in Intel TDX with NVIDIA GPU attestation. |
+| Enclave verification | On every question BlindSight checks the gateway and model TDX quotes against Intel's certificate chain, bound to a fresh nonce. |
+| Encrypted question | The prompt is sent with Oblivious HTTP (RFC 9458), encrypted to a key signed by the attested gateway, so it is unreadable outside the enclave. |
+| Signed answer | The enclave's ed25519 signature over the exact request and response bytes is verified against the attested key. |
+| Privacy receipt | Each answer shows **Verified private answer** with expandable details. |
+| Publishing | A one-time 0.05 NEAR fee. The dataset is encrypted with AES-256-GCM into a private Supabase bucket; only metadata is listed. |
+| Unpublishing | Only the publisher can remove a vault, proven with a fresh NEP-413 wallet signature that is verified on chain. |
+| Sample datasets | Three synthetic datasets in server-only code. The browser only sends a `vaultId`. |
+| Anti-probing | Best effort: in-memory query history and pattern checks per server instance. |
+| Replay protection | Best effort for query payments (in-memory, per instance). Publishing fees are single-use, enforced by a unique database column. |
 
-| Area | Status | What actually happens |
-| --- | --- | --- |
-| Wallet connection | **Real** | NEAR Wallet Selector with MyNearWallet and Meteor on `testnet`. The connected account comes from Wallet Selector state. |
-| Account balance | **Real** | Read from the public FastNear testnet RPC (`view_account`). There is no local ledger or minted balance. |
-| Query payment | **Real** | The buyer signs a native NEAR transfer. Sample-vault fees go to the funded treasury; published-vault fees go to the publisher's configured payout account. |
-| Payment verification | **Real** | The server fetches the finalized transaction from `https://rpc.testnet.fastnear.com` and checks signer, receiver, amount, execution status, and age. |
-| Answer gating | **Real** | `/api/verify-payment` confirms the transfer, then `/api/query-tee` re-verifies the same hash before inference runs. |
-| AI inference | **Real** | The server calls NEAR AI Cloud (`z-ai/glm-5.3`) with `NEAR_AI_API_KEY`. |
-| Sample datasets | **Fictional data, real gating** | Three synthetic datasets live in server-only code. The browser only sends a `vaultId`. |
-| Dataset lifecycle | **Prototype enclave (mimicked)** | The route drops its prepared dataset reference after inference. JavaScript cannot guarantee heap zeroing, and this is not hardware isolation. |
-| TEE / enclave attestation | **Mimicked** | No hardware attestation exists and the UI does not display a fake attestation token. The interface labels the enclave as a server-side prototype. |
-| Publisher payout | **Real for published vaults** | A published vault's full query fee is verified against and transferred to its configured payout account. Sample-vault fees go to the BlindSight treasury. |
-| Shared vault storage | **Supabase** | Published metadata is stored in the shared `vaults` table. Encrypted datasets are stored in the private `vault-datasets` bucket; listing responses contain metadata only. |
-| Anti-probing checks | **Best effort** | In-memory query history and pattern checks per server instance. Not a guarantee against dataset reconstruction. |
-| Replay protection | **Best effort** | In-memory, per-instance map with a 24-hour TTL. It is not a network-wide nonce. |
-
-There are no local balances, mock addresses, fake transaction hashes, or simulated payment-success
-paths in the app. The only external prerequisite is testnet NEAR for the query fee; use the
-[NEAR testnet faucet](https://near-faucet.io/) if your wallet is empty.
+There are no mock balances, fake transaction hashes or fabricated attestation tokens. If testnet
+NEAR is needed, use the [NEAR testnet faucet](https://near-faucet.io/).
 
 ---
 
-## NEAR tools used
-
-- **NEAR testnet** — the settlement network.
-- **`@near-wallet-selector/core`**, **`@near-wallet-selector/my-near-wallet`**,
-  **`@near-wallet-selector/meteor-wallet`**, **`@near-wallet-selector/modal-ui`** — wallet
-  connection and transaction signing.
-- **`near-api-js`** — `parseNearAmount`, transfer actions, and the account surface used for signing.
-- **Public NEAR testnet RPC** (`https://rpc.testnet.fastnear.com`) — balance reads and finalized
-  transaction lookup.
-- **NEAR AI Cloud** (`https://cloud-api.near.ai/v1`) — the inference provider.
-- **NEARBlocks explorer** — transaction and account links surfaced in the UI.
-
-Treasury account:
+## How a paid question works
 
 ```text
-blindsight-ceeaa6612a.testnet
+Buyer browser                   BlindSight server                    External
+─────────────                   ─────────────────                    ────────
+1. Pick a vault, ask
+2. Wallet approves price +
+   platform fee transfers ─────────────────────────────────────────► NEAR testnet
+3. POST /api/query-tee ───────► verify both transfers via RPC ──────► NEAR RPC
+                                load dataset (decrypt if published)
+                                anti-probing checks
+                                attest enclave (TDX quotes, nonce) ─► NEAR AI attestation
+                                OHTTP-encrypt prompt ───────────────► NEAR AI enclave
+                                verify enclave signature ◄────────── DeepSeek V3.2
+4. Answer + payment + receipt ◄─
 ```
 
-It exists and is funded on testnet. The app never needs its private key, and no key is committed to
-this repository.
-
----
-
-## How a paid query works
-
-```text
-Buyer browser                     Next.js server                   NEAR testnet
-─────────────                     ──────────────                   ────────────
-1. Select a vault
-2. Ask a question
-3. Wallet signs native NEAR transfer ─────────────────────────────► treasury
-4. POST /api/verify-payment ─────► RPC lookup + checks ────────────► RPC
-                                   returns "payment confirmed"
-5. POST /api/query-tee ─────────► re-verify payment
-                                   resolve server-side dataset
-                                   call NEAR AI Cloud
-6. Answer + payment metadata ◄─── insight + verified transfer
-```
-
-What the UI shows at each stage:
-
-1. **Connecting** — the wallet selector opens and the connected testnet account appears in the header.
-2. **Paying** — the wallet is open and the transfer is awaiting approval.
-3. **Payment confirmed** — the server has checked the finalized transfer; the amount, receiver, block
-   height, and explorer link are displayed.
-4. **Generating answer** — NEAR AI inference starts only after the payment is confirmed.
-5. **Answer ready** — the insight appears with the same transaction hash and the inference model.
-6. **Error** — the failure reason is displayed. If the payment was already confirmed, the answer can
-   be retried with the same transfer instead of paying twice.
-
-The server does not trust the client. It reads the transaction from RPC and validates:
+The server does not trust the client. For each transfer it checks:
 
 - the transaction is finalized and executed successfully;
-- the signer matches the claimed payer account;
-- the receiver is the configured treasury;
-- the native NEAR deposit covers the vault price;
-- the transaction is younger than two hours;
-- the hash has not already been consumed on this server instance.
+- the signer is the claimed payer;
+- the receiver is the vault's payout account, or the platform treasury for the fee;
+- the deposit covers the vault price or fee;
+- the transaction is less than two hours old;
+- the hash has not already been used on this server instance.
+
+If inference fails after the payment is verified, the same payment can be retried without paying
+again.
+
+### Timing
+
+The first question on a fresh server instance takes about 25–35 seconds, because Intel quote
+verification takes around 20 of them. Attestations are cached for 10 minutes, after which answers
+take about 8–12 seconds. If enclave verification can't finish in time, the buyer still gets the
+answer, and the receipt shows only the checks that passed.
 
 ---
 
-## Judge demo (about 3 minutes)
+## Demo (about 3 minutes)
 
-The live app is preloaded with three sample vaults, so there is no setup beyond a funded testnet
-wallet.
+1. Open [https://blindsight-zeta.vercel.app/](https://blindsight-zeta.vercel.app/) and enter the
+   marketplace.
+2. Click **Connect Wallet** and choose a NEAR testnet wallet. Fund it from the
+   [faucet](https://near-faucet.io/) if needed.
+3. Pick a sample vault:
+   - **Medical Research Cohort 2026**, 0.1 NEAR
+   - **Q3 Financial & Market Demand**, 0.15 NEAR
+   - **Solidity Security Audit Report**, 0.2 NEAR
 
-1. Open [https://blindsight-zeta.vercel.app/](https://blindsight-zeta.vercel.app/).
-   **See:** the **Paid query console** with three sample vaults and a **Connect Wallet** button.
-2. Click **Connect Wallet** and choose a NEAR testnet wallet.
-   **See:** the wallet selector opens; after approval the header shows your `*.testnet` account and
-   its real RPC balance.
-3. If the account has no testnet NEAR, open the [NEAR testnet faucet](https://near-faucet.io/) and
-   fund it. This is an external prerequisite; the app itself has no faucet.
-4. Keep one of the preloaded sample vaults selected:
-  - **Q3 Financial & Market Demand** — 0.15 NEAR
-  - **Medical Research Cohort 2026** — 0.1 NEAR
-  - **Solidity Security Audit Report** — 0.2 NEAR
-   **See:** the vault card shows the price, publisher, row count, and the treasury fee recipient.
-5. Ask a question, for example:
-   - *Which segment has the highest year-over-year growth?*
-   - *Summarize the most serious open security findings.*
-   **See:** the query composer fills; the button reads **Pay … NEAR & ask**.
-6. Click **Pay … NEAR & ask**.
-   **See:** the wallet popup asks you to approve a real native NEAR transfer to
-   `blindsight-ceeaa6612a.testnet`.
-7. Approve the transfer in the wallet.
-   **See:** the button advances through **Paying... → Confirming payment... → Payment confirmed →
-   Generating answer...**.
-8. Confirm the green **Payment confirmed on NEAR testnet** panel and open the NEARBlocks link.
-   **See:** the finalized transaction on the explorer with the same hash the app displays.
-9. The answer appears below.
-   **See:** **Answer ready** with the insight, the verified payment amount and block height, the
-   inference model, and the same transaction hash. The raw dataset is never returned.
+   Each question also adds the 0.01 NEAR platform fee, shown in the price breakdown.
+4. Ask a question, for example *Which segment has the highest year-over-year growth?*
+5. Approve the transfers in the wallet. The app moves through payment confirmation to the answer.
+6. Under the answer, open **Details** on **Verified private answer**. It shows the Intel TDX
+   status, the model and GPU check, that the question was encrypted to the enclave, the enclave's
+   signing key, and fingerprints of the question and answer.
+7. The transaction links open on NEARBlocks.
 
-Verification plus inference typically takes 5–30 seconds. The wallet also charges a small network
-fee. If inference times out, the confirmed payment remains retryable without paying twice.
-
-The **Vault Explorer** lets you switch between the samples and published vaults. The **Publish Vault**
-tab stores metadata and encrypted dataset content in Supabase, so listings are shared across users
-and persist across deployments. Query fees for published vaults go to their configured payout account; sample
-vault fees continue to go to the treasury.
-
-### If the page looks stale
-
-The app sends `Cache-Control: no-store` for `/`, but an already-cached tab can still survive a
-deploy. Do a hard refresh (`Ctrl+Shift+R` / `Cmd+Shift+R`) or open the URL in a private window. The
-current build shows **Pay 0.15 NEAR & ask**, **Payment confirmed**, and **Answer ready**; it does not
-contain the old "simulated locally" copy.
+To publish your own vault, use the **Publish** tab: upload a file, set a price and payout account,
+and pay the publishing fee. Your vaults show a remove option that only your wallet can authorize.
 
 ---
 
@@ -158,63 +104,44 @@ contain the old "simulated locally" copy.
 ### Prerequisites
 
 - Node.js 20.9+
-- npm
 - A NEAR testnet wallet such as [MyNearWallet](https://testnet.mynearwallet.com/) or Meteor
-- Testnet NEAR in that wallet for the query fee and network fee
 
-### Install
+### Install and run
 
 ```bash
-git clone https://github.com/prosperlinho/blindsight.git
-cd blindsight
+git clone https://github.com/Prosperlinho/Blindsight.git
+cd Blindsight
 npm install
+cp .env.example .env.local
+npm run dev
 ```
+
+Open [http://localhost:3000](http://localhost:3000).
 
 ### Environment
 
-Copy `.env.example` to `.env.local`:
-
-```bash
-cp .env.example .env.local
-```
-
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `NEAR_AI_API_KEY` | **Yes** | Server-side key for NEAR AI Cloud inference. |
-| `NEXT_PUBLIC_BLINDSIGHT_TREASURY_ACCOUNT` | Recommended | Public treasury address shown to the browser. Defaults to `blindsight-ceeaa6612a.testnet`. |
+| `NEAR_AI_API_KEY` | **Yes** | Server-side key for NEAR AI Cloud. |
+| `NEXT_PUBLIC_BLINDSIGHT_TREASURY_ACCOUNT` | Optional | Treasury for sample-vault payments. Defaults to `blindsight-ceeaa6612a.testnet`. |
 | `BLINDSIGHT_TREASURY_ACCOUNT` | Optional | Server-side override for the same treasury. |
-| `NEXT_PUBLIC_NEAR_NETWORK` | Optional | `testnet` (the only supported value). |
-| `SUPABASE_URL` | Required for published vaults | Supabase project URL. |
-| `SUPABASE_ANON_KEY` | Required for published vaults | Supabase anon key used for server-side REST calls. |
-| `PUBLISHED_VAULT_ENCRYPTION_KEY` | Required for published vaults | Stable 32-byte hex key for AES-256-GCM dataset encryption. Back it up; rotating it makes existing uploads unreadable. |
+| `NEXT_PUBLIC_BLINDSIGHT_PLATFORM_TREASURY` | Optional | Receives platform fees. Defaults to the treasury. |
+| `NEXT_PUBLIC_BLINDSIGHT_QUERY_FEE_NEAR` | Optional | Per-question fee. Default `0.01`; `0` disables it. |
+| `NEXT_PUBLIC_BLINDSIGHT_PUBLISH_FEE_NEAR` | Optional | One-time publishing fee. Default `0.05`; `0` disables it. |
+| `SUPABASE_URL` | For publishing | Supabase project URL. |
+| `SUPABASE_ANON_KEY` | For publishing | Used only server-side. |
+| `PUBLISHED_VAULT_ENCRYPTION_KEY` | For publishing | Stable 32-byte hex key for AES-256-GCM. Back it up: changing it makes existing uploads unreadable. |
 
-If you point the treasury at a different account, it must exist on testnet and the buyer must be able
-to transfer to it. Verification only needs the public account address.
-
-To enable shared publishing, run [`supabase/schema.sql`](supabase/schema.sql) in the Supabase SQL
-Editor, then set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `PUBLISHED_VAULT_ENCRYPTION_KEY` in the
-deployment environment. The SQL creates the `vaults` table and a private `vault-datasets` bucket.
-Its anon-role policies allow public listing, publishing, and access to encrypted dataset objects;
-do not store unencrypted datasets in that bucket. Generate the encryption key with:
+To enable publishing, run [`supabase/schema.sql`](supabase/schema.sql) in the Supabase SQL Editor.
+It creates the `vaults` table, the private `vault-datasets` bucket and their policies. It is safe
+to re-run after upgrades. Generate the encryption key with:
 
 ```bash
 node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 ```
 
-Keep the encryption key stable and back it up. Supabase stores metadata in `public.vaults` and each
-encrypted dataset separately, referenced by `file_reference`. Without these values, sample vaults
-continue to work, while shared listing and publishing are unavailable.
-
-Without `NEAR_AI_API_KEY`, the app still boots and payments still verify, but a paid query returns
-`INFERENCE_NOT_CONFIGURED`. The confirmed payment stays retryable after you add the key.
-
-### Run
-
-```bash
-npm run dev
-```
-
-Open [http://localhost:3000](http://localhost:3000).
+Without Supabase, sample vaults still work. Without `NEAR_AI_API_KEY`, payments still verify, but
+questions return `INFERENCE_NOT_CONFIGURED`. The payment stays retryable once the key is added.
 
 ### Checks
 
@@ -230,116 +157,83 @@ npm run build
 
 ```text
 app/
-  page.tsx                     Marketplace shell, real wallet state, RPC balance
+  page.tsx                   Landing page
+  marketplace/page.tsx       Marketplace shell, wallet state, activity
   api/
-    verify-payment/route.ts    Explicit "payment confirmed" endpoint
-    query-tee/route.ts         Re-verify payment, resolve dataset, run inference
-    vaults/route.ts            Shared Supabase marketplace listing and publishing
-    vault/parse/route.ts       Real text/PDF extraction (rejects unreadable files)
+    query-tee/route.ts       Verify payments, load dataset, private inference
+    vaults/route.ts          List, publish (fee-verified) and unpublish (signature-verified)
+    vault/parse/route.ts     Text and PDF extraction
+    verify-payment/route.ts  Standalone transfer check (optional for agents)
 components/
-  QueryVault.tsx               Paid query console and stage machine
-  ConnectModal.tsx             Real NEAR Wallet Selector connection
-  PaymentAudit.tsx             Settlement/verification details and client audit log
-  WalletProvider.tsx           Wallet Selector provider
+  QueryVault.tsx             Vault explorer, query console, publishing
+  PrivacyReceipt.tsx         "Verified private answer" receipt
+  LandingIntro.tsx           Landing content
+  ConnectModal.tsx, WalletProvider.tsx
 lib/
-  paymentConfig.ts             Treasury, RPC/explorer URLs, yocto helpers
-  paymentVerification.ts       On-chain transfer verification
-  nearAccount.ts               Real RPC balance, account-ID validation
-  near-transfers.ts            Wallet signing and transaction-hash extraction
-  nearWallet.ts                Wallet Selector setup and disconnect
-  demoVaults.ts                Client-safe sample vault metadata
-  demoVaultDatasets.ts         Server-only synthetic datasets
-  publishedVaults.ts           Supabase metadata and encrypted dataset storage
-  datasetQuality.ts            Dataset preparation and in-memory cache
-  auditLog.ts                  Client audit-log entry type
-scripts/
+  privateInference.ts        TDX attestation, OHTTP/HPKE, enclave signature checks
+  paymentVerification.ts     On-chain transfer verification
+  platformFees.ts            Query and publishing fees
+  near-transfers.ts          Wallet signing, batched transfers
+  publishedVaults.ts         Supabase metadata and encrypted storage
+  vaultOwnership.ts, verifyVaultOwner.ts   NEP-413 unpublish proofs
+  demoVaults.ts, demoVaultDatasets.ts      Sample vaults (datasets server-only)
+  datasetQuality.ts          Dataset preparation and cache
+supabase/schema.sql          Tables, bucket, policies
 ```
 
 ---
 
-## API contracts
-
-### `POST /api/verify-payment`
-
-```json
-{
-  "txHash": "…",
-  "payerAccountId": "buyer.testnet",
-  "vaultId": "q3-financial-market-demand"
-}
-```
-
-Returns:
-
-```json
-{
-  "success": true,
-  "verified": true,
-  "payment": {
-    "txHash": "…",
-    "payerAccountId": "buyer.testnet",
-    "receiverId": "blindsight-ceeaa6612a.testnet",
-    "amountNear": "0.5",
-    "blockHeight": 123456789,
-    "verifiedAt": "…"
-  }
-}
-```
-
-Failures return `{ success: false, verified: false, error, code }` with a 4xx status.
+## API
 
 ### `POST /api/query-tee`
 
 ```json
 {
   "query": "Which segment grew fastest?",
-  "txHash": "…",
+  "txHash": "<vault price transfer>",
+  "feeTxHash": "<platform fee transfer>",
   "payerAccountId": "buyer.testnet",
   "vaultId": "q3-financial-market-demand"
 }
 ```
 
-The server re-verifies the transfer, resolves sample data from the server catalog or published data
-from Supabase Storage, and then calls inference. Published dataset text is never included in the listing
-response or sent back to the buyer.
+`feeTxHash` is required when the query fee is enabled. A successful response contains:
 
-A successful response includes `insight`, `receiptId` (the verified transaction hash), `payment`,
-`inference` metadata, and a `prototype` object that states the TEE is mimicked and that the dataset
-reference is dropped after inference. No attestation token is fabricated.
+- `insight`
+- `receiptId` (the price transaction hash)
+- `payment`, the verified transfer details
+- `privacy`, the receipt: `attested`, `encryptedToEnclave`, `responseSigned`, the TCB statuses,
+  the GPU verdict, the attestation nonce, the signer key, and the request and response hashes
 
----
+Failures return `{ success: false, error, code }` with a 4xx or 5xx status.
 
-## Agent integration
+### `GET /api/vaults` · `POST /api/vaults` · `DELETE /api/vaults`
 
-Any agent that controls a NEAR testnet key can use the same rail without a browser wallet:
+- `GET` lists published vault metadata.
+- `POST` publishes a vault and requires a verified publishing-fee transaction.
+- `DELETE` requires a NEP-413 signature from the publisher.
 
-1. Sign a native NEAR transfer to the treasury for the vault's listed price.
-2. POST the transaction hash, payer account ID, and `vaultId` to `/api/verify-payment`.
-3. POST the same payment plus the question to `/api/query-tee`.
+### Agents
 
-The server authenticates the payer from the on-chain signer and receiver, so no session or API key is
-needed for the payment step. The inference key stays on the server.
+Any agent with a NEAR testnet key can use the same flow without a browser:
 
----
+1. Transfer the vault price to its payout account and the fee to the platform treasury.
+2. POST both hashes, the payer account, the `vaultId` and the question to `/api/query-tee`.
+3. Read `privacy` in the response to confirm the answer came from a verified enclave.
 
 ---
 
 ## Security and limitations
 
-This is a hackathon prototype, not a production confidential-computing service.
+- **BlindSight's server is not an enclave.** It decrypts published datasets in memory to build
+  the prompt. The path from BlindSight to the model is attested, encrypted and signed, but
+  publishers must trust BlindSight's server with their data. Moving this step into a TEE is the
+  next milestone.
+- **No escrow contract.** Transfers settle directly to recipients on testnet.
+- **Replay protection and anti-probing are per instance and in memory**, and reset on cold
+  starts.
+- **Anti-probing is heuristic.** It raises the cost of reconstructing a dataset but doesn't
+  prevent it.
 
-- **No hardware TEE.** The enclave is a server-side prototype and no hardware attestation is
-  verified. The UI says so directly.
-- **The server sees the data.** Dataset text is sent to the configured NEAR AI endpoint for
-  inference. Use synthetic or non-sensitive data only.
-- **There is no escrow contract.** Sample fees settle to the testnet treasury; published-vault fees
-  settle directly to the configured publisher payout account.
-- **Replay protection is best effort.** It uses an in-memory map and resets when a serverless
-  instance restarts.
-- **Anti-probing is heuristic.** It raises the cost of extraction; it does not make a dataset
-  impossible to reconstruct.
-- **Published files are encrypted in Supabase Storage.** Metadata is public; dataset bytes are
-  encrypted before upload and decrypted server-side for paid inference. The app sends the dataset
-  to NEAR AI after a paid query; use synthetic or non-sensitive data.
-
-Do not use real personal, medical, financial, or confidential data with this prototype.
+Use synthetic or non-sensitive data. Don't upload real personal, medical, financial or
+confidential data.
