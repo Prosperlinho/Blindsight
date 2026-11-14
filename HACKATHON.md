@@ -26,7 +26,7 @@ Everything below is live on testnet. There are no mock tokens, fake hashes or si
 | Wallets | NEAR Wallet Selector (MyNearWallet, Meteor) on testnet. Balances are read from the public RPC. |
 | Paying for a question | One wallet approval signs two native NEAR transfers: the vault price to the publisher (or the treasury for sample vaults), and a 0.01 NEAR platform fee to the treasury. |
 | Payment verification | The server fetches both finalized transactions from the RPC. It checks signer, receiver, amount, success and age before any AI runs. |
-| Publishing | Publishers upload a CSV, JSON, TXT or PDF and pay a one-time 0.05 NEAR publishing fee. The dataset is encrypted with AES-256-GCM and stored in a private Supabase bucket. Only metadata is listed publicly. |
+| Publishing | Publishers upload CSV, TXT or Markdown files (up to 500 KB) and pay a one-time 0.05 NEAR publishing fee. The dataset is encrypted with AES-256-GCM and stored in a private Supabase bucket. Only metadata is listed publicly. |
 | Unpublishing | Only the publishing account can remove a vault. It proves ownership with a fresh NEP-413 wallet signature, which the server verifies against a full-access key on chain. |
 | Private inference | DeepSeek V3.2 on NEAR AI Cloud, inside Intel TDX with NVIDIA GPU attestation. BlindSight verifies the enclave on every question; see below. |
 | Privacy receipt | Each answer shows **Verified private answer**, with details: the Intel check, the model, encryption, the enclave signature and fingerprints. |

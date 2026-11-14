@@ -5,6 +5,7 @@ import Image from "next/image";
 import { ArrowUp } from "lucide-react";
 import { useRouter } from "next/navigation";
 import LandingIntro from "@/components/LandingIntro";
+import SiteFooter from "@/components/SiteFooter";
 import { useWallet } from "@/components/WalletProvider";
 
 const MARKETPLACE_PATH = "/marketplace";
@@ -161,10 +162,7 @@ export default function LandingPage() {
         />
       </main>
 
-      <footer className="mx-auto flex w-full max-w-6xl items-center gap-2 border-t border-white/10 px-4 py-5 text-xs text-slate-500 sm:px-6">
-        <Image src="/logo-mark.png" alt="" width={18} height={18} className="size-[18px] object-contain opacity-80" />
-        <span>BlindSight · Confidential data marketplace</span>
-      </footer>
+      <SiteFooter />
 
       <button
         type="button"

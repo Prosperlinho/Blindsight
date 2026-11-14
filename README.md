@@ -7,7 +7,9 @@ vaults. Buyers pay in NEAR to ask a question and get an AI answer, never the raw
 runs in an attested hardware enclave on NEAR AI Cloud. BlindSight verifies that enclave on every
 question, encrypts the question to it, and shows a signed privacy receipt with the answer.
 
-**Live app:** [https://blindsight-zeta.vercel.app/](https://blindsight-zeta.vercel.app/)
+**Live app:** [https://blindsight-zeta.vercel.app/](https://blindsight-zeta.vercel.app/) ·
+[Docs](https://blindsight-zeta.vercel.app/docs) ·
+[Privacy policy](https://blindsight-zeta.vercel.app/privacy)
 
 Hackathon write-up (Track 3, Privacy & Private AI): [HACKATHON.md](HACKATHON.md).
 
@@ -45,7 +47,7 @@ Hackathon write-up (Track 3, Privacy & Private AI): [HACKATHON.md](HACKATHON.md)
 | Encrypted question | The prompt is sent with Oblivious HTTP (RFC 9458), encrypted to a key signed by the attested gateway, so it is unreadable outside the enclave. |
 | Signed answer | The enclave's ed25519 signature over the exact request and response bytes is verified against the attested key. |
 | Privacy receipt | Each answer shows **Verified private answer** with expandable details. |
-| Publishing | A one-time 0.05 NEAR fee. The dataset is encrypted with AES-256-GCM into a private Supabase bucket; only metadata is listed. |
+| Publishing | Upload CSV, TXT or Markdown files (up to 500 KB combined) and pay a one-time 0.05 NEAR fee. The dataset is encrypted with AES-256-GCM into a private Supabase bucket; only metadata is listed. |
 | Unpublishing | Only the publisher can remove a vault, proven with a fresh NEP-413 wallet signature that is verified on chain. |
 | Sample datasets | Three synthetic datasets in server-only code. The browser only sends a `vaultId`. |
 | Anti-probing | Best effort: in-memory query history and pattern checks per server instance. |
@@ -178,6 +180,8 @@ npm run build
 app/
   page.tsx                   Landing page
   marketplace/page.tsx       Marketplace shell, wallet state, activity
+  docs/page.tsx              User and API documentation (/docs)
+  privacy/page.tsx           Privacy policy (/privacy)
   api/
     query-tee/route.ts       Verify payments, load dataset, private inference
     vaults/route.ts          List, publish (fee-verified) and unpublish (signature-verified)
@@ -187,6 +191,7 @@ components/
   QueryVault.tsx             Vault explorer, query console, publishing
   PrivacyReceipt.tsx         "Verified private answer" receipt
   LandingIntro.tsx           Landing content
+  InfoPage.tsx, SiteFooter.tsx   Docs/privacy page shell and shared footer
   ConnectModal.tsx, WalletProvider.tsx
 lib/
   privateInference.ts        TDX attestation, OHTTP/HPKE, enclave signature checks
@@ -256,3 +261,14 @@ Any agent with a NEAR testnet key can use the same flow without a browser:
 
 Use synthetic or non-sensitive data. Don't upload real personal, medical, financial or
 confidential data.
+
+See the [privacy policy](https://blindsight-zeta.vercel.app/privacy) for what data the app
+handles and how long it is kept.
+
+---
+
+## Contact
+
+Questions, privacy requests or bug reports: email
+[prosperlinho@gmail.com](mailto:prosperlinho@gmail.com) or open an
+[issue on GitHub](https://github.com/Prosperlinho/Blindsight/issues).

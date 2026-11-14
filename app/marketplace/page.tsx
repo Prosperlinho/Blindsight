@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import QueryVault, { VAULT_TABS, type VaultTab } from "@/components/QueryVault";
 import { useWallet } from "@/components/WalletProvider";
+import SiteFooter from "@/components/SiteFooter";
 import { fetchNearBalance, isValidNearAccountId, type NearAccountBalance } from "@/lib/nearAccount";
 import { extractTransactionHash, transferNear } from "@/lib/near-transfers";
 import { ExternalLink, LogOut } from "lucide-react";
@@ -491,6 +492,8 @@ export default function MarketplacePage() {
           onTabChange={setActiveTab}
         />
       </main>
+
+      <SiteFooter className="max-w-5xl" />
 
       {activeWalletError && (
         <div
