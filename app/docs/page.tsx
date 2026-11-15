@@ -146,9 +146,11 @@ export default function DocsPage() {
           </tbody>
         </table>
         <p>
-          The receipt only claims what actually passed. If a check couldn&apos;t finish in time, you still get
-          the answer you paid for, the badge reads <strong>Private processing</strong> instead, and the details
-          show which checks passed.
+          Enclave verification and encryption are mandatory. If the enclave can&apos;t be verified or the
+          encrypted channel fails, your question is never sent and you can retry with the same payment. The
+          answer signature is checked after the answer arrives. If that check can&apos;t finish in time, you still
+          get the answer, the badge reads <strong>Private processing</strong> instead, and the details show which
+          checks passed.
         </p>
       </InfoSection>
 
@@ -295,6 +297,12 @@ export default function DocsPage() {
         <p>
           The first question after the server starts includes about 20 seconds of enclave verification. Later
           questions are faster.
+        </p>
+        <h3>&ldquo;The private AI enclave couldn&apos;t be verified&rdquo;</h3>
+        <p>
+          BlindSight refuses to send your question unless it can go encrypted to a verified enclave. This
+          usually clears up within a minute, because verification keeps running in the background. Try again
+          with the same payment.
         </p>
         <h3>Payment went through but no answer</h3>
         <p>

@@ -44,13 +44,13 @@ Hackathon write-up (Track 3, Privacy & Private AI): [HACKATHON.md](HACKATHON.md)
 | Payment verification | The server fetches both finalized transactions from `https://rpc.testnet.fastnear.com`. It checks signer, receiver, amount, execution status and age before inference. |
 | Private inference | `deepseek/deepseek-v3.2` on NEAR AI Cloud, running in Intel TDX with NVIDIA GPU attestation. |
 | Enclave verification | On every question BlindSight checks the gateway and model TDX quotes against Intel's certificate chain, bound to a fresh nonce. |
-| Encrypted question | The prompt is sent with Oblivious HTTP (RFC 9458), encrypted to a key signed by the attested gateway, so it is unreadable outside the enclave. |
+| Encrypted question | The prompt is sent with Oblivious HTTP (RFC 9458), encrypted to a key signed by the attested gateway, so it is unreadable outside the enclave. There is no plain-HTTPS fallback: if the enclave can't be verified or OHTTP fails, the prompt is not sent and the payment stays retryable. |
 | Signed answer | The enclave's ed25519 signature over the exact request and response bytes is verified against the attested key. |
 | Privacy receipt | Each answer shows **Verified private answer** with expandable details. |
 | Publishing | Upload CSV, TXT or Markdown files (up to 500 KB combined) and pay a one-time 0.05 NEAR fee. The dataset is encrypted with AES-256-GCM into a private Supabase bucket; only metadata is listed. |
 | Unpublishing | Only the publisher can remove a vault, proven with a fresh NEP-413 wallet signature that is verified on chain. |
 | Sample datasets | Three synthetic datasets in server-only code. The browser only sends a `vaultId`. |
-| Anti-probing | Best effort: in-memory query history and pattern checks per server instance. |
+| Anti-probing | Best effort: in-memory query history and pattern checks per server instance. Only keyed hashes of each question and its words are kept, never the question text. |
 | Replay protection | Best effort for query payments (in-memory, per instance). Publishing fees are single-use, enforced by a unique database column. |
 
 There are no mock balances, fake transaction hashes or fabricated attestation tokens. If testnet
@@ -91,8 +91,10 @@ again.
 
 The first question on a fresh server instance takes about 25–35 seconds, because Intel quote
 verification takes around 20 of them. Attestations are cached for 10 minutes, after which answers
-take about 8–12 seconds. If enclave verification can't finish in time, the buyer still gets the
-answer, and the receipt shows only the checks that passed.
+take about 8–12 seconds. If the enclave can't be verified in time, the question is not sent and the
+buyer can retry with the same payment once verification completes in the background. If only the
+answer signature can't be checked in time, the buyer still gets the answer, and the receipt shows
+only the checks that passed.
 
 ---
 

@@ -1,6 +1,5 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
-import OpenAI from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import {
   cachePreparedDataset,
@@ -12,7 +11,12 @@ import {
 import { getDemoVault } from "@/lib/demoVaults";
 import { getDemoVaultDataset } from "@/lib/demoVaultDatasets";
 import { getPublishedVault, getPublishedVaultDataset } from "@/lib/publishedVaults";
-import { prewarmAttestation, runPrivateCompletion, type PrivacyReceipt } from "@/lib/privateInference";
+import {
+  prewarmAttestation,
+  PrivateTransportError,
+  runPrivateCompletion,
+  type PrivacyReceipt,
+} from "@/lib/privateInference";
 import { getTreasuryAccount, nearToYocto } from "@/lib/paymentConfig";
 import { feeToYocto, getPlatformTreasury, getQueryFeeNear, isFeeEnabled } from "@/lib/platformFees";
 import {
@@ -41,7 +45,6 @@ const INFERENCE_DEADLINE_MS = 52_000;
 const MIN_RETRY_BUDGET_MS = 12_000;
 const MAX_INFERENCE_ATTEMPTS = 2;
 const INFERENCE_MAX_TOKENS = 450;
-const NEAR_AI_BASE_URL = "https://cloud-api.near.ai/v1";
 const QUERY_WINDOW_MS = 10 * 60 * 1000;
 const MAX_QUERY_MATCHES = 5;
 const MAX_QUERY_PATTERN_KEYS = 2_000;
@@ -72,12 +75,16 @@ How to answer:
 - If the dataset cannot answer the question, say in one sentence what is missing.
 - Never invent numbers, records, or claims that are not supported by the dataset.`;
 
-type QueryPattern = { terms: string[]; timestamp: number; query: string; hash: string; receiptId: string };
+// Anti-probing memory never holds question text. Each entry keeps keyed hashes
+// of the question and of its words (enough to spot repeats and overlap), plus
+// a flag for extraction-style wording.
+type QueryPattern = { terms: string[]; timestamp: number; hash: string; receiptId: string };
 
 type QueryHistoryEntry = {
   timestamp: number;
   hash: string;
-  query: string;
+  terms: string[];
+  extraction: boolean;
   receiptId: string;
 };
 
@@ -196,38 +203,6 @@ function cacheVerifiedPayment(
   });
 }
 
-/**
- * Cleans up model formatting that is noisy in the answer card: code fences,
- * leading labels, decorative bullets, and trailing chatty lines.
- */
-function normalizeInsight(raw: string): string {
-  let text = raw.replace(/\r\n/g, "\n").trim();
-  if (!text) return "";
-
-  text = text.replace(/^```[a-z0-9-]*\s*\n?/i, "").replace(/\n?```\s*$/i, "");
-  text = text.replace(/^(?:answer|response|insight)\s*:\s*/i, "");
-  text = text.replace(/^here (?:are|is)[^\n]*\n+/i, "");
-  text = text.replace(/^[\u2022\u25CF\u25AA\u2023]\s+/gm, "- ");
-  text = text.replace(/\n+(?:let me know|i hope this helps|feel free to)[^\n]*$/i, "");
-  text = text.replace(/[ \t]+$/gm, "");
-  text = text.replace(/\n{3,}/g, "\n\n");
-
-  // Keep lists visually separated from the paragraph above them. Use the
-  // block-aware walk so consecutive list items stay tight.
-  const lines = text.split("\n");
-  const output: string[] = [];
-  const isListLine = (line: string) => /^\s*(?:[-*+]|\d+[.)])\s+/.test(line);
-  for (const line of lines) {
-    const previous = output[output.length - 1] ?? "";
-    if (isListLine(line) && previous.trim() && !isListLine(previous)) {
-      output.push("");
-    }
-    output.push(line);
-  }
-
-  return output.join("\n").trim();
-}
-
 const STOP_WORDS = new Set([
   "about", "above", "after", "against", "among", "and", "are", "for", "from", "have", "into",
   "show", "that", "the", "their", "them", "then", "there", "these", "this", "those", "what",
@@ -255,8 +230,21 @@ function isRepetitiveExtractionPrompt(query: string) {
   return ANTI_PROBE_KEYWORDS.some((pattern) => normalized.includes(pattern)) || /\b(name of|value of|row where|person with|specific|exactly)\b/i.test(query);
 }
 
+// Random per-instance key, so stored hashes can't be matched against a word
+// list without it. It never leaves memory and changes on every cold start.
+const QUERY_HASH_KEY = randomBytes(32);
+
+function keyedHash(value: string) {
+  return createHmac("sha256", QUERY_HASH_KEY).update(value).digest("hex");
+}
+
+/** Keyed hashes of the question's words, for overlap checks without the text. */
+function hashedQueryTerms(query: string) {
+  return queryTerms(query).map((term) => keyedHash(term).slice(0, 16));
+}
+
 function normalizeQueryHash(query: string) {
-  return createHash("sha256").update(query.trim().toLowerCase().replace(/\s+/g, " ")).digest("hex");
+  return keyedHash(query.trim().toLowerCase().replace(/\s+/g, " "));
 }
 
 function getDatasetFingerprint(dataset: string) {
@@ -271,13 +259,13 @@ function isQueryPatternFlagged(request: Request, dataset: PreparedDataset, query
   const patternKey = createHash("sha256").update(`${requester}:${datasetFingerprint}`).digest("hex");
   const now = Date.now();
   const history = (queryPatterns.get(patternKey) ?? []).filter((entry) => now - entry.timestamp < QUERY_WINDOW_MS);
-  const terms = queryTerms(query);
+  const terms = hashedQueryTerms(query);
   const hash = normalizeQueryHash(query);
   if (history.some((entry) => entry.receiptId === receiptId && entry.hash === hash)) return false;
   const overlappingCount = history.filter((entry) => queriesOverlap(entry.terms, terms)).length;
   const flagged = (isHyperSpecific(query, terms) || overlappingCount > 0) && overlappingCount >= MAX_QUERY_MATCHES;
 
-  history.push({ terms, timestamp: now, hash, query, receiptId });
+  history.push({ terms, timestamp: now, hash, receiptId });
   queryPatterns.set(patternKey, history.slice(-30));
   while (queryPatterns.size > MAX_QUERY_PATTERN_KEYS) {
     const oldestKey = queryPatterns.keys().next().value;
@@ -297,11 +285,14 @@ function checkQueryHistoryLimit(dataset: PreparedDataset, query: string, userId:
     queryHistory.set(key, entries);
     return { blocked: false, message: "OK" };
   }
-  const repetitiveExtraction = isRepetitiveExtractionPrompt(query)
-    && entries.some((entry) => isRepetitiveExtractionPrompt(entry.query) && queriesOverlap(queryTerms(query), queryTerms(entry.query)));
+  const terms = hashedQueryTerms(query);
+  const extraction = isRepetitiveExtractionPrompt(query);
+  const repetitiveExtraction = extraction
+    && entries.some((entry) => entry.extraction && queriesOverlap(terms, entry.terms));
+  const entry: QueryHistoryEntry = { timestamp: now, hash: signature, terms, extraction, receiptId };
 
   if (entries.length >= MAX_REQUESTS_PER_WINDOW || repetitiveExtraction) {
-    entries.push({ timestamp: now, hash: signature, query, receiptId });
+    entries.push(entry);
     queryHistory.set(key, entries.slice(-50));
     return {
       blocked: true,
@@ -309,7 +300,7 @@ function checkQueryHistoryLimit(dataset: PreparedDataset, query: string, userId:
     };
   }
 
-  entries.push({ timestamp: now, hash: signature, query, receiptId });
+  entries.push(entry);
   queryHistory.set(key, entries.slice(-50));
   return { blocked: false, message: "OK" };
 }
@@ -498,133 +489,6 @@ function successResponse({
   });
 }
 
-type StreamInferenceArgs = {
-  client: OpenAI;
-  apiKey: string;
-  messages: ChatCompletionMessageParam[];
-  receiptId: string;
-  paymentHashes: string[];
-  datasetId?: unknown;
-};
-
-function sseFrame(payload: Record<string, unknown>) {
-  return `data: ${JSON.stringify(payload)}\n\n`;
-}
-
-/**
- * Streams the model output as server-sent events so the answer starts rendering
- * as soon as the first tokens arrive. If generation fails, the client receives
- * an error frame and can retry with the same verified transfer.
- */
-function streamInference({
-  client,
-  apiKey,
-  messages,
-  receiptId,
-  paymentHashes,
-  datasetId,
-}: StreamInferenceArgs): Response {
-  const encoder = new TextEncoder();
-  let streamClosed = false;
-
-  const send = (
-    controller: ReadableStreamDefaultController<Uint8Array>,
-    payload: Record<string, unknown>,
-  ) => {
-    if (streamClosed) return;
-    try {
-      controller.enqueue(encoder.encode(sseFrame(payload)));
-    } catch {
-      streamClosed = true;
-    }
-  };
-
-  const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      const abortController = new AbortController();
-      const timeoutId = setTimeout(() => abortController.abort(), INFERENCE_TIMEOUT_MS);
-      let completed = false;
-
-      try {
-        const completion = await client.chat.completions.create(
-          {
-            model: MODEL,
-            messages,
-            max_tokens: INFERENCE_MAX_TOKENS,
-            temperature: 0.2,
-            top_p: 0.9,
-            stream: true,
-          },
-          { signal: abortController.signal, maxRetries: 0 },
-        );
-
-        let collected = "";
-        for await (const chunk of completion) {
-          if (streamClosed) {
-            abortController.abort();
-            break;
-          }
-          const delta = chunk.choices[0]?.delta?.content ?? "";
-          if (!delta) continue;
-          collected += delta;
-          send(controller, { type: "token", value: delta });
-        }
-
-        if (abortController.signal.aborted && !streamClosed) {
-          throw new Error("The inference request timed out.");
-        }
-
-        const insight = normalizeInsight(collected);
-        if (!insight) throw new Error("The inference gateway returned no insight.");
-
-        markPaymentSettled(paymentHashes);
-
-        completed = true;
-        send(controller, {
-          type: "done",
-          insight,
-          receiptId,
-          settlementType: "VERIFIED_NEAR_TRANSFER",
-        });
-      } catch (error) {
-        const aborted = abortController.signal.aborted;
-        const stage = aborted ? "inference-stream-timeout" : "inference-stream";
-        logInferenceFailure(stage, error, apiKey);
-        const credentialFailure = getInferenceCredentialFailure(error);
-        send(controller, {
-          type: "error",
-          code: credentialFailure?.code ?? (aborted ? "INFERENCE_TIMEOUT" : "INFERENCE_FAILED"),
-          error: credentialFailure?.message ?? (aborted
-            ? "The answer took too long. Your payment is confirmed; try again in a moment."
-            : "The answer could not be generated. Your payment is confirmed; try again in a moment."),
-        });
-      } finally {
-        clearTimeout(timeoutId);
-        deleteCachedPreparedDataset(datasetId);
-        streamClosed = true;
-        try {
-          controller.close();
-        } catch {
-          // The stream was already cancelled by the client.
-        }
-        if (!completed) releasePaymentClaim(paymentHashes);
-      }
-    },
-    cancel() {
-      streamClosed = true;
-    },
-  });
-
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no",
-    },
-  });
-}
-
 export async function POST(req: NextRequest) {
   const requestStartedAt = Date.now();
   let failureStage = "request";
@@ -674,9 +538,7 @@ export async function POST(req: NextRequest) {
       fileContent,
       userId,
       agentId,
-      stream: rawStream,
     } = parsedBody as Record<string, unknown>;
-    const wantsStream = rawStream === true || rawStream === "true";
     failureStage = "vault-storage";
 
     // Log only non-sensitive presence flags. Never log query text, dataset
@@ -958,7 +820,6 @@ export async function POST(req: NextRequest) {
 
     const dataset = formatInferenceDataset(prepared);
 
-    const client = new OpenAI({ baseURL: NEAR_AI_BASE_URL, apiKey });
     const messages: ChatCompletionMessageParam[] = [
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: `Dataset context:\n${dataset}\n\nResearch query:\n${submittedQuery}` },
@@ -977,18 +838,6 @@ export async function POST(req: NextRequest) {
         });
       }
       throw claimError;
-    }
-
-    if (wantsStream) {
-      const response = streamInference({
-        client,
-        apiKey,
-        messages,
-        receiptId,
-        paymentHashes,
-        datasetId,
-      });
-      return response;
     }
 
     failureStage = "inference";
@@ -1088,6 +937,21 @@ export async function POST(req: NextRequest) {
       // The payment was valid but inference failed, so release the claim and
       // let the buyer retry with the same transfer instead of paying twice.
       releasePaymentClaim(paymentHashes);
+      if (err instanceof PrivateTransportError) {
+        // Nothing was sent: the question only leaves over OHTTP to a verified enclave.
+        console.warn("[Query] Prompt withheld; private channel unavailable.", {
+          stage: err.stage,
+          attempts: inferenceAttempts,
+          totalMs: Date.now() - requestStartedAt,
+        });
+        return errorResponse(
+          503,
+          err.stage === "attestation-unavailable"
+            ? "The AI enclave couldn't be verified in time, so your question wasn't sent. Your payment is confirmed; retry in a moment."
+            : "The encrypted channel to the AI enclave failed, so your question wasn't sent. Your payment is confirmed; retry in a moment.",
+          { code: "ENCLAVE_UNAVAILABLE", paymentVerified: true, payment },
+        );
+      }
       const credentialFailure = getInferenceCredentialFailure(err);
       if (credentialFailure) {
         logInferenceFailure("inference-authentication", err, apiKey);

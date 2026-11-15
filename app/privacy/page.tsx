@@ -6,7 +6,7 @@ export const metadata: Metadata = {
   description: "What data BlindSight handles, where it goes and how long it is kept.",
 };
 
-const LAST_UPDATED = "November 14, 2026";
+const LAST_UPDATED = "November 15, 2026";
 
 const SECTIONS = [
   { id: "summary", title: "Summary" },
@@ -40,8 +40,8 @@ export default function PrivacyPage() {
           <li>There are no BlindSight accounts, no cookies, no analytics and no advertising trackers.</li>
           <li>You are identified only by your NEAR account ID, which is public on the blockchain.</li>
           <li>
-            Questions are not saved to a database. They are held briefly in server memory for abuse protection,
-            then discarded.
+            Questions are only ever sent encrypted to a verified AI enclave, and the question text isn&apos;t kept
+            after your request finishes.
           </li>
           <li>
             Published datasets are encrypted at rest and deleted when you unpublish. BlindSight&apos;s server can
@@ -76,19 +76,22 @@ export default function PrivacyPage() {
             runs inside an attested hardware enclave.
           </li>
           <li>
-            Normally encrypts that prompt with Oblivious HTTP to a key held by the enclave, so NEAR AI&apos;s
-            infrastructure outside the enclave can&apos;t read it. If that encrypted channel fails, the prompt is
-            sent over standard HTTPS instead, and the privacy receipt for that answer says it was not encrypted
-            to the enclave.
+            Encrypts that prompt with Oblivious HTTP to a key held by the verified enclave, so NEAR AI&apos;s
+            infrastructure outside the enclave can&apos;t read it. If the enclave can&apos;t be verified or the
+            encrypted channel fails, <strong>the prompt is not sent at all</strong>. You get an error, and your
+            payment stays valid for a retry.
           </li>
           <li>
-            Keeps your question text, keyed by your account ID and the vault, in memory for up to 10 minutes to
-            detect attempts to reconstruct a dataset through many narrow questions.
+            To detect attempts to reconstruct a dataset through many narrow questions, it keeps a short record
+            for up to 10 minutes. The record holds keyed hashes of the question and of its words, and whether
+            it looked like an extraction attempt. It is grouped by your account ID and the vault, and separately
+            by a hash of your IP address and the vault. It never contains the question text. The hashing key is
+            random, exists only in that server&apos;s memory, and changes whenever the server restarts.
           </li>
         </ol>
         <p>
-          Questions and answers are not written to a database or to logs. In-memory data is lost whenever a
-          server instance restarts. The answer is returned to your browser and not kept on the server.
+          Questions and answers are not written to a database or to logs, and the question text isn&apos;t kept
+          after your request finishes. The answer is returned to your browser and not kept on the server.
         </p>
         <p>
           The publisher of a vault does not see your questions. They can see the payments to their account on
@@ -162,7 +165,7 @@ export default function PrivacyPage() {
             </tr>
             <tr>
               <td>NEAR AI Cloud</td>
-              <td>The prompt (your question plus dataset contents), normally encrypted to its enclave.</td>
+              <td>The prompt (your question plus dataset contents), always encrypted to its enclave.</td>
             </tr>
             <tr>
               <td>Supabase</td>
@@ -194,7 +197,11 @@ export default function PrivacyPage() {
           </thead>
           <tbody>
             <tr>
-              <td>Question text (in memory)</td>
+              <td>Question text</td>
+              <td>Only while your request is being answered</td>
+            </tr>
+            <tr>
+              <td>Anti-probing hashes (in memory, no question text)</td>
               <td>Up to 10 minutes, or until the server instance restarts</td>
             </tr>
             <tr>

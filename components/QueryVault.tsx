@@ -73,6 +73,9 @@ function toQueryError(status: number, code?: string): QueryError {
   if (code === "INFERENCE_ACCESS_DENIED") {
     return new QueryError("NEAR AI denied model access. Your payment is confirmed; retry after access is corrected.", true);
   }
+  if (code === "ENCLAVE_UNAVAILABLE") {
+    return new QueryError("The private AI enclave couldn't be verified, so your question wasn't sent. Your payment is confirmed; try again in a moment.", true);
+  }
   if (status === 429) {
     return new QueryError("Too many similar questions. Try asking something broader.", false);
   }
@@ -186,83 +189,6 @@ function renderInsight(value: string): ReactNode {
       </p>
     );
   });
-}
-
-type StreamedAnswer = {
-  insight: string;
-  receiptId?: string;
-};
-
-async function readStreamedAnswer(
-  response: Response,
-  onInsight: (insight: string) => void,
-): Promise<StreamedAnswer> {
-  const reader = response.body?.getReader();
-  if (!reader) throw new QueryError(ANSWER_RETRY_MESSAGE, true);
-
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let partialInsight = "";
-  let insight = "";
-  let receiptId: string | undefined;
-  let receivedAnswer = false;
-
-  function readFrame(frame: string) {
-    const data = frame
-      .split(/\r?\n/)
-      .filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice(5).trimStart())
-      .join("\n");
-    if (!data) return;
-
-    let value: unknown;
-    try {
-      value = JSON.parse(data);
-    } catch {
-      throw new QueryError(ANSWER_RETRY_MESSAGE, true);
-    }
-
-    if (typeof value !== "object" || value === null) {
-      throw new QueryError(ANSWER_RETRY_MESSAGE, true);
-    }
-
-    const frameData = value as Record<string, unknown>;
-    if (frameData.type === "token" && typeof frameData.value === "string") {
-      partialInsight += frameData.value;
-      onInsight(partialInsight);
-      return;
-    }
-    if (frameData.type === "error") {
-      const message = typeof frameData.error === "string" ? frameData.error : ANSWER_RETRY_MESSAGE;
-      throw new QueryError(message, true);
-    }
-    if (frameData.type === "done") {
-      const finalInsight = typeof frameData.insight === "string" ? frameData.insight.trim() : "";
-      if (!finalInsight) throw new QueryError(ANSWER_RETRY_MESSAGE, true);
-      insight = finalInsight;
-      receiptId = typeof frameData.receiptId === "string" ? frameData.receiptId : undefined;
-      receivedAnswer = true;
-    }
-  }
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      buffer += decoder.decode(value, { stream: !done });
-      const frames = buffer.split(/\r?\n\r?\n/);
-      buffer = frames.pop() ?? "";
-      for (const frame of frames) readFrame(frame);
-      if (done) {
-        if (buffer.trim()) readFrame(buffer);
-        break;
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  if (!receivedAnswer) throw new QueryError(ANSWER_RETRY_MESSAGE, true);
-  return { insight, receiptId };
 }
 
 function formatBytes(bytes: number) {
@@ -446,32 +372,19 @@ export default function QueryVault({
       throw toQueryError(response.status, code);
     }
 
-    let insight = "";
-    let receiptId: string | undefined;
-    let privacy: PrivacyReceiptData | null = null;
-    if (response.headers.get("content-type")?.includes("text/event-stream")) {
-      const streamed = await readStreamedAnswer(response, (partialInsight) => {
-        if (runId === runIdRef.current) {
-          setAnswer({ vaultTitle: vault.title, insight: partialInsight });
-        }
-      });
-      insight = streamed.insight;
-      receiptId = streamed.receiptId;
-    } else {
-      let result: unknown;
-      try {
-        result = await response.json();
-      } catch {
-        throw new QueryError(ANSWER_RETRY_MESSAGE, true);
-      }
-
-      const record = typeof result === "object" && result !== null
-        ? result as Record<string, unknown>
-        : {};
-      insight = typeof record.insight === "string" ? record.insight.trim() : "";
-      receiptId = typeof record.receiptId === "string" ? record.receiptId : undefined;
-      privacy = parsePrivacyReceipt(record.privacy);
+    let result: unknown;
+    try {
+      result = await response.json();
+    } catch {
+      throw new QueryError(ANSWER_RETRY_MESSAGE, true);
     }
+
+    const record = typeof result === "object" && result !== null
+      ? result as Record<string, unknown>
+      : {};
+    const insight = typeof record.insight === "string" ? record.insight.trim() : "";
+    const receiptId = typeof record.receiptId === "string" ? record.receiptId : undefined;
+    const privacy = parsePrivacyReceipt(record.privacy);
 
     if (!insight || (receiptId && receiptId !== execution.txHash)) {
       throw new QueryError(ANSWER_RETRY_MESSAGE, true);

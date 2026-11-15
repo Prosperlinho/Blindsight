@@ -84,7 +84,7 @@ export type PrivacyReceipt = {
   signer: string | null;
   requestHash: string;
   responseHash: string;
-  /** Stage that prevented full verification, when something fell back. */
+  /** Stage that prevented full verification (e.g. the answer signature didn't verify in time). */
   note: string | null;
 };
 
@@ -98,6 +98,18 @@ class AttestationError extends Error {
   constructor(readonly stage: string, message: string) {
     super(message);
     this.name = "AttestationError";
+  }
+}
+
+/**
+ * The prompt was not sent because it could not travel encrypted to a verified
+ * enclave. BlindSight never falls back to plain HTTPS: the prompt contains the
+ * buyer's question and vault data, so it only leaves the server via OHTTP.
+ */
+export class PrivateTransportError extends Error {
+  constructor(readonly stage: "attestation-unavailable" | "encrypted-transport-failed", message: string) {
+    super(message);
+    this.name = "PrivateTransportError";
   }
 }
 
@@ -496,7 +508,8 @@ async function verifyResponseSignature(
 /**
  * Runs one chat completion. Waits up to `attestationWaitMs` for a verified
  * environment (cached after the first check), then sends the request over
- * attested OHTTP, falling back to standard HTTPS if that is not possible.
+ * attested OHTTP. Throws PrivateTransportError, without sending anything, if
+ * the enclave isn't verified in time or the encrypted channel fails.
  */
 export async function runPrivateCompletion({
   apiKey,
@@ -516,43 +529,23 @@ export async function runPrivateCompletion({
 }): Promise<PrivateCompletion> {
   const body = Buffer.from(requestBody, "utf8");
   const environment = await getAttestedEnvironment(apiKey, model, attestationWaitMs);
-  let note: string | null = environment ? null : "attestation-unavailable";
-
-  let status = 0;
-  let raw: Buffer | null = null;
-  let encryptedToEnclave = false;
-
-  if (environment) {
-    try {
-      const result = await sendOhttp(environment, apiKey, body, signal);
-      status = result.status;
-      raw = result.body;
-      encryptedToEnclave = true;
-    } catch (error) {
-      if (signal.aborted) throw error;
-      note = "encrypted-transport-failed";
-      console.warn("[Private Inference] OHTTP request failed; using standard HTTPS.", {
-        message: error instanceof Error ? error.message.slice(0, 200) : "unknown",
-      });
-    }
+  if (!environment) {
+    throw new PrivateTransportError("attestation-unavailable", "The enclave could not be verified in time.");
   }
+  let note: string | null = null;
 
-  if (!raw) {
-    const response = await fetch(`${NEAR_AI_ORIGIN}/v1/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        "Accept-Encoding": "identity",
-        "x-no-aliasing": "true",
-      },
-      body,
-      cache: "no-store",
-      signal,
+  let status: number;
+  let raw: Buffer;
+  try {
+    ({ status, body: raw } = await sendOhttp(environment, apiKey, body, signal));
+  } catch (error) {
+    if (signal.aborted) throw error;
+    console.warn("[Private Inference] OHTTP request failed; prompt not sent.", {
+      message: error instanceof Error ? error.message.slice(0, 200) : "unknown",
     });
-    status = response.status;
-    raw = Buffer.from(await response.arrayBuffer());
+    throw new PrivateTransportError("encrypted-transport-failed", "The encrypted channel to the enclave failed.");
   }
+  const encryptedToEnclave = true;
 
   const rawBody = raw.toString("utf8");
   const requestHash = sha256Hex(body);

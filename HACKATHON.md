@@ -46,13 +46,19 @@ BlindSight doesn't take NEAR AI's word that inference is private. It checks the 
    live certificate differs from the attested fingerprint. So BlindSight does not rely on HTTPS.
    It encrypts the question with **Oblivious HTTP** (RFC 9458, using HPKE with X25519 and
    AES-128-GCM) to a key that the attested gateway signed. Only the enclave can decrypt it.
+   There is no plain-HTTPS fallback: if the enclave isn't verified or OHTTP fails, the question
+   is never sent, and the buyer retries with the same payment.
 4. **Signed answer.** The enclave signs `sha256(request):sha256(response)` with its attested
    ed25519 key. BlindSight checks that signature against the exact bytes it sent and received.
 5. **Receipt.** The results go to the buyer with the answer. Attestations are cached for 10 minutes,
    so only the first question on a fresh server pays the roughly 20-second verification cost.
 
-If a check can't finish in time, the buyer still gets the answer they paid for. The receipt then
-shows only what was actually verified; it never claims more.
+Attestation and encryption are mandatory. Only the answer-signature check can be skipped: if it
+can't finish in time, the buyer still gets the answer they paid for, and the receipt shows only
+what was actually verified. It never claims more.
+
+Anti-probing never stores question text. It keeps keyed hashes (HMAC with a random per-instance
+key) of each question and its words, which is enough to detect repeated or overlapping questions.
 
 The implementation is in `lib/privateInference.ts`. HPKE, OHTTP and Binary HTTP are written
 directly against the RFCs and the reference client in `nearai/nearai-cloud-verifier`.
