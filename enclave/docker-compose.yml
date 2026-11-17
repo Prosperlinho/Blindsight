@@ -4,7 +4,7 @@
 # by digest so the hash identifies exactly one build.
 services:
   blindsight-enclave:
-    image: ghcr.io/prosperlinho/blindsight-enclave@sha256:REPLACE_WITH_IMAGE_DIGEST
+    image: ghcr.io/prosperlinho/blindsight-enclave@sha256:1728cf8974e90f2c3fbc3b274bfd639f2c33c140399bc3b3e8399fef853e8bde
     restart: always
     ports:
       - "8080:8080"
