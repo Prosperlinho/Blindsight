@@ -1,0 +1,17 @@
+# Deployed to Phala Cloud with `phala deploy` (see enclave/README.md).
+# The SHA-256 of the generated app-compose (which includes this file) is the
+# "compose hash" the web server pins in ENCLAVE_COMPOSE_HASH. Pin the image
+# by digest so the hash identifies exactly one build.
+services:
+  blindsight-enclave:
+    image: ghcr.io/prosperlinho/blindsight-enclave@sha256:REPLACE_WITH_IMAGE_DIGEST
+    restart: always
+    ports:
+      - "8080:8080"
+    volumes:
+      # dstack guest agent: key derivation and TDX quotes.
+      - /var/run/dstack.sock:/var/run/dstack.sock
+    environment:
+      # Supplied as Phala encrypted secrets; only readable inside the TEE.
+      - NEAR_AI_API_KEY=${NEAR_AI_API_KEY}
+      - ENCLAVE_API_TOKEN=${ENCLAVE_API_TOKEN}

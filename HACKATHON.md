@@ -19,7 +19,7 @@ AI that reads the data runs where neither the buyer nor the infrastructure opera
 
 ## 2. What works today
 
-Everything below is live on testnet. There are no mock tokens, fake hashes or simulated balances.
+Everything below is live on testnet unless its row says otherwise. There are no mock tokens, fake hashes or simulated balances.
 
 | Area | What actually happens |
 | --- | --- |
@@ -29,7 +29,10 @@ Everything below is live on testnet. There are no mock tokens, fake hashes or si
 | Publishing | Publishers upload CSV, TXT or Markdown files (up to 500 KB) and pay a one-time 0.05 NEAR publishing fee. The dataset is encrypted with AES-256-GCM and stored in a private Supabase bucket. Only metadata is listed publicly. |
 | Unpublishing | Only the publishing account can remove a vault. It proves ownership with a fresh NEP-413 wallet signature, which the server verifies against a full-access key on chain. |
 | Private inference | DeepSeek V3.2 on NEAR AI Cloud, inside Intel TDX with NVIDIA GPU attestation. BlindSight verifies the enclave on every question; see below. |
-| Privacy receipt | Each answer shows **Verified private answer**, with details: the Intel check, the model, encryption, the enclave signature and fingerprints. |
+| Privacy receipt | Each answer shows **Verified private answer**, with details: the Intel check, the model, encryption, the enclave signature, fingerprints, and where the vault data was opened. |
+| Aggregate-only answers | Questions asking for raw records are refused before inference; answers that reproduce records, quote long passages, come back as tables or contain personal identifiers are withheld. The buyer keeps the payment and can rephrase. |
+| Shared replay protection | Used payments are claimed atomically in Upstash Redis and each payment is tied to one question, across all server instances. |
+| Enclave mode | A BlindSight enclave on Phala Cloud (Intel TDX) is the only place datasets are decrypted. Publishers' browsers seal datasets to it, and the server verifies its attestation, code hash and signed responses. Built and tested; on when `ENCLAVE_URL` is set. |
 
 ## 3. How BlindSight verifies the enclave
 
@@ -83,16 +86,16 @@ Answer + payment proof + privacy receipt ──► buyer
 
 ## 5. Honest limits
 
-- **BlindSight's own server is not an enclave.** It decrypts the published dataset in memory to
-  build the prompt. The path from BlindSight to the model is attested and encrypted, but buyers
-  and publishers must still trust BlindSight's server. The receipt says this explicitly. The next
-  step is to run the decrypt-and-prompt step inside a TEE so the dataset key never exists outside
-  one.
+- **Enclave mode moves trust, it doesn't remove it.** With it on, the dataset key exists only
+  inside BlindSight's attested enclave, and publishers trust Phala's OS image and key service and
+  the app owner's upgrade control. Without it, BlindSight's server decrypts datasets to build the
+  prompt. The receipt states which applied to each answer.
 - **Testnet only.** No escrow contract exists; transfers settle directly to the recipients.
-- **Replay protection and anti-probing are per server instance.** Both are in-memory. Publishing
-  fees are made single-use by a unique database column.
-- **Anti-probing is heuristic.** It raises the cost of reconstructing a dataset through many
-  narrow questions but doesn't make reconstruction impossible.
+- **Shared state needs Redis.** With Upstash configured, replay protection and anti-probing are
+  shared across instances; without it they fall back to per-instance memory. Publishing fees are
+  made single-use by a unique database column.
+- **Aggregate-only checks and anti-probing are heuristics.** They stop bulk copying and raise the
+  cost of reconstructing a dataset through many narrow questions, but don't make it impossible.
 - Use synthetic or non-sensitive data.
 
 ## 6. NEAR stack
@@ -102,8 +105,8 @@ NEAR AI Cloud (private inference, attestation and signature APIs) · NEARBlocks.
 
 ## 7. Next steps
 
-1. Move dataset decryption and prompt building into a TEE, so publishers never have to trust
-   BlindSight's server.
-2. Settle through an escrow contract with refunds for failed answers.
-3. Make replay protection and query history network-wide.
-4. Expose the full attestation report for independent re-verification.
+1. Verify the enclave's MRTD and RTMR0-2 against Phala's published OS measurements, and govern
+   enclave upgrades on chain.
+2. Seal questions in the buyer's browser too, so they reach the enclave end-to-end encrypted.
+3. Settle through an escrow contract with refunds for failed answers.
+4. Add differential-privacy noise to numeric aggregates.

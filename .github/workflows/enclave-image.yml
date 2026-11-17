@@ -1,0 +1,58 @@
+# Builds the BlindSight enclave image and publishes it to GitHub Container
+# Registry. The digest printed in the job summary goes into
+# enclave/docker-compose.yml before deploying to Phala Cloud.
+name: Enclave image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, enclave-deploy]
+    paths:
+      - "enclave/**"
+      - "lib/answerGuard.ts"
+      - "lib/datasetQuality.ts"
+      - "lib/enclaveProtocol.ts"
+      - "lib/privateAnswer.ts"
+      - "lib/privateInference.ts"
+      - ".github/workflows/enclave-image.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Image name
+        id: name
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/blindsight-enclave" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: enclave/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.name.outputs.image }}:latest
+            ${{ steps.name.outputs.image }}:${{ github.sha }}
+      - name: Summary
+        run: |
+          {
+            echo "### Enclave image"
+            echo ""
+            echo "Pin this in enclave/docker-compose.yml:"
+            echo ""
+            echo '```'
+            echo "${{ steps.name.outputs.image }}@${{ steps.push.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

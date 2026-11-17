@@ -1,0 +1,19 @@
+{
+  "name": "blindsight-enclave",
+  "version": "0.1.0",
+  "private": true,
+  "description": "BlindSight enclave service: decrypts sealed vaults and answers questions inside a Phala Cloud TDX confidential VM.",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/server.ts --bundle --platform=node --target=node22 --format=esm --packages=external --alias:server-only=./src/empty.ts --outfile=dist/server.mjs",
+    "start": "node dist/server.mjs"
+  },
+  "dependencies": {
+    "@noble/curves": "1.9.7",
+    "@phala/dcap-qvl": "0.7.1",
+    "@phala/dstack-sdk": "0.5.8"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

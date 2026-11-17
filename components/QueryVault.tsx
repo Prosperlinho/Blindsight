@@ -13,7 +13,13 @@ import {
 import { Buffer } from "buffer";
 import { Search, Trash2, X } from "lucide-react";
 import { WalletContext } from "@/components/WalletProvider";
-import PrivacyReceipt, { parsePrivacyReceipt, type PrivacyReceiptData } from "@/components/PrivacyReceipt";
+import PrivacyReceipt, {
+  parseDatasetEnclave,
+  parsePrivacyReceipt,
+  type DatasetEnclaveData,
+  type PrivacyReceiptData,
+} from "@/components/PrivacyReceipt";
+import { sealForEnclaveInBrowser, SealingUnsupportedError, type BrowserSealedDataset } from "@/lib/sealBrowser";
 import { DEMO_VAULTS, type MarketplaceVault } from "@/lib/demoVaults";
 import { isValidNearAccountId } from "@/lib/nearAccount";
 import { buildUnpublishMessage, OWNERSHIP_NONCE_BYTES, OWNERSHIP_RECIPIENT } from "@/lib/vaultOwnership";
@@ -56,14 +62,27 @@ const PLATFORM_TREASURY = getPlatformTreasury();
 
 /** A user-facing query failure. `canRetry` means the payment can be reused. */
 class QueryError extends Error {
-  constructor(message: string, readonly canRetry: boolean) {
+  /** `rephrase`: the same payment can be used with a different question. */
+  constructor(message: string, readonly canRetry: boolean, readonly rephrase = false) {
     super(message);
   }
 }
 
 const ANSWER_RETRY_MESSAGE = "We couldn't get your answer this time. Your question is ready to try again.";
 
-function toQueryError(status: number, code?: string): QueryError {
+function toQueryError(status: number, code?: string, serverMessage?: string): QueryError {
+  // Aggregate-only guard: the payment is still unused, so the buyer can ask a
+  // broader question with it. The server explains what was refused.
+  if (code === "QUESTION_NOT_AGGREGATE" || code === "ANSWER_WITHHELD") {
+    return new QueryError(
+      `${serverMessage ?? "BlindSight only answers with aggregate insights."} Edit your question above, then use your existing payment.`,
+      true,
+      true,
+    );
+  }
+  if (code === "STORE_UNAVAILABLE") {
+    return new QueryError("We couldn't record your payment safely just now. Your payment is confirmed; try again in a moment.", true);
+  }
   if (code === "INFERENCE_NOT_CONFIGURED") {
     return new QueryError("Inference is not configured. Your payment is confirmed; retry after the server key is configured.", true);
   }
@@ -116,6 +135,7 @@ type VaultAnswer = {
   vaultTitle: string;
   insight: string;
   privacy?: PrivacyReceiptData | null;
+  datasetEnclave?: DatasetEnclaveData | null;
 };
 
 const PANEL = "rounded-2xl border border-white/10 bg-slate-900/70 backdrop-blur-xl";
@@ -217,6 +237,7 @@ export default function QueryVault({
   const [query, setQuery] = useState("");
   const [stage, setStage] = useState<QueryStage>("idle");
   const [retryContext, setRetryContext] = useState<QueryExecution | null>(null);
+  const [retryRephrases, setRetryRephrases] = useState(false);
   const [answer, setAnswer] = useState<VaultAnswer | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
@@ -361,15 +382,17 @@ export default function QueryVault({
 
     if (!response.ok) {
       let code: string | undefined;
+      let serverMessage: string | undefined;
       try {
         const result: unknown = await response.json();
-        if (typeof result === "object" && result !== null && "code" in result && typeof result.code === "string") {
-          code = result.code;
+        if (typeof result === "object" && result !== null) {
+          if ("code" in result && typeof result.code === "string") code = result.code;
+          if ("error" in result && typeof result.error === "string") serverMessage = result.error;
         }
       } catch {
         // HTTP failures may not include a JSON body.
       }
-      throw toQueryError(response.status, code);
+      throw toQueryError(response.status, code, serverMessage);
     }
 
     let result: unknown;
@@ -385,12 +408,13 @@ export default function QueryVault({
     const insight = typeof record.insight === "string" ? record.insight.trim() : "";
     const receiptId = typeof record.receiptId === "string" ? record.receiptId : undefined;
     const privacy = parsePrivacyReceipt(record.privacy);
+    const datasetEnclave = parseDatasetEnclave(record.enclave);
 
     if (!insight || (receiptId && receiptId !== execution.txHash)) {
       throw new QueryError(ANSWER_RETRY_MESSAGE, true);
     }
 
-    setAnswer({ vaultTitle: vault.title, insight, privacy });
+    setAnswer({ vaultTitle: vault.title, insight, privacy, datasetEnclave });
     setStage("ready");
     setRetryContext(null);
   }
@@ -400,10 +424,16 @@ export default function QueryVault({
       await executeAnswer(execution, runId);
     } catch (error) {
       if (error instanceof QueryError) {
-        if (runId === runIdRef.current) setRetryContext(error.canRetry ? execution : null);
+        if (runId === runIdRef.current) {
+          setRetryContext(error.canRetry ? execution : null);
+          setRetryRephrases(error.rephrase);
+        }
         failQuery(runId, error.message);
       } else {
-        if (runId === runIdRef.current) setRetryContext(execution);
+        if (runId === runIdRef.current) {
+          setRetryContext(execution);
+          setRetryRephrases(false);
+        }
         failQuery(runId, ANSWER_RETRY_MESSAGE);
       }
     }
@@ -479,9 +509,18 @@ export default function QueryVault({
 
   async function handleRetryAnswer() {
     if (!retryContext || isExecuting) return;
+    // After a refusal, the payment is reused with the edited question.
+    const editedQuery = query.trim();
+    const execution = retryRephrases && editedQuery
+      ? { ...retryContext, submittedQuery: editedQuery }
+      : retryContext;
+    if (retryRephrases && editedQuery === retryContext.submittedQuery) {
+      setErrorMessage("Edit your question first. The same question would be refused again.");
+      return;
+    }
     const runId = runIdRef.current + 1;
     runIdRef.current = runId;
-    await runExecution(retryContext, runId);
+    await runExecution(execution, runId);
   }
 
   function removeVaultFromList(vault: MarketplaceVault, message: string) {
@@ -659,7 +698,49 @@ export default function QueryVault({
     }
   }
 
+  /**
+   * Enclave mode: encrypts the dataset in this browser to the attested
+   * BlindSight enclave, then has the enclave check it. Returns null in direct
+   * mode, or false (after notifying) if the dataset can't be published.
+   */
+  async function sealDatasetForEnclave(dataset: string): Promise<BrowserSealedDataset | null | false> {
+    try {
+      const enclaveResponse = await fetch("/api/enclave", { cache: "no-store" });
+      const enclave = await enclaveResponse.json() as { enabled?: boolean; sealPublicKey?: string; error?: string };
+      if (!enclave.enabled) return null;
+      if (!enclaveResponse.ok || !enclave.sealPublicKey) {
+        setNotification(enclave.error ?? "The BlindSight enclave couldn't be verified right now. Try again in a moment.");
+        return false;
+      }
+      const sealed = await sealForEnclaveInBrowser(dataset, enclave.sealPublicKey);
+      const check = await fetch("/api/enclave/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sealedDataset: sealed }),
+      });
+      if (!check.ok) {
+        const result = await check.json().catch(() => ({})) as { error?: string };
+        setNotification(result.error ?? "The enclave couldn't read this dataset. Check the file format and try again.");
+        return false;
+      }
+      return sealed;
+    } catch (error) {
+      setNotification(
+        error instanceof SealingUnsupportedError
+          ? error.message
+          : "Couldn't encrypt your dataset for the enclave. Please try again.",
+      );
+      return false;
+    }
+  }
+
   async function publishVault(publisherAddress: string, seller: string) {
+    const title = draftTitle.trim();
+    const dataset = draftFiles.map((file) => `### ${file.name}\n${file.content}`).join("\n\n");
+    // Sealed and checked before any fee is paid, so a bad file costs nothing.
+    const sealedDataset = await sealDatasetForEnclave(dataset);
+    if (sealedDataset === false) return;
+
     // One-time publishing fee, paid before the vault is saved. If saving fails
     // afterwards, the paid fee is kept so a retry doesn't charge again.
     let publishFeeTxHash: string | undefined;
@@ -692,8 +773,6 @@ export default function QueryVault({
       }
     }
 
-    const title = draftTitle.trim();
-    const dataset = draftFiles.map((file) => `### ${file.name}\n${file.content}`).join("\n\n");
     let publishedVault: MarketplaceVault;
     try {
       const response = await fetch("/api/vaults", {
@@ -705,7 +784,8 @@ export default function QueryVault({
           priceNear: normalizePrice(draftPrice),
           publisherAddress,
           payoutAddress: seller,
-          dataset,
+          // In enclave mode only the sealed dataset leaves this browser.
+          ...(sealedDataset ? { sealedDataset } : { dataset }),
           publishFeeTxHash,
         }),
       });
@@ -866,7 +946,7 @@ export default function QueryVault({
                           onClick={() => void handleRetryAnswer()}
                           className={`${SECONDARY_BUTTON} mt-3`}
                         >
-                          Try again
+                          {retryRephrases ? "Ask edited question" : "Try again"}
                         </button>
                       )}
                     </div>
@@ -883,7 +963,7 @@ export default function QueryVault({
                       <div className="mt-5 max-w-prose space-y-4 break-words text-[15px] leading-7 text-slate-100 sm:text-base">
                         {renderInsight(answer.insight)}
                       </div>
-                      {stage === "ready" && answer.privacy && <PrivacyReceipt receipt={answer.privacy} />}
+                      {stage === "ready" && answer.privacy && <PrivacyReceipt receipt={answer.privacy} datasetEnclave={answer.datasetEnclave} />}
                     </article>
                   )}
                 </div>

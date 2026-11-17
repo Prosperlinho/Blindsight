@@ -5,6 +5,7 @@ import { prepareDataset } from "@/lib/datasetQuality";
 import { isValidNearAccountId } from "@/lib/nearAccount";
 import { nearToYocto } from "@/lib/paymentConfig";
 import type { MarketplaceVault } from "@/lib/demoVaults";
+import { isSealedDataset, type SealedDataset } from "@/lib/enclaveProtocol";
 
 const STORAGE_BUCKET = "vault-datasets";
 const MAX_LISTED_VAULTS = 100;
@@ -46,7 +47,8 @@ type EncryptedDataset = {
 type SupabaseConfig = {
   url: string;
   anonKey: string;
-  encryptionKey: Buffer;
+  /** Server-side dataset key (direct mode only). Enclave mode never needs it. */
+  encryptionKey: Buffer | null;
 };
 
 export class PublishedVaultStorageError extends Error {
@@ -103,11 +105,7 @@ function getSupabaseConfig(): SupabaseConfig {
     console.error("[Published Vaults] Configuration error:", { code });
     throw new PublishedVaultStorageError(code, "configuration");
   }
-  if (!encryptionKey) {
-    console.error("[Published Vaults] Configuration error:", { code: "MISSING_PUBLISHED_VAULT_ENCRYPTION_KEY" });
-    throw new PublishedVaultStorageError("MISSING_PUBLISHED_VAULT_ENCRYPTION_KEY", "configuration");
-  }
-  if (!/^[a-f0-9]{64}$/i.test(encryptionKey)) {
+  if (encryptionKey && !/^[a-f0-9]{64}$/i.test(encryptionKey)) {
     console.error("[Published Vaults] Configuration error:", {
       code: "INVALID_PUBLISHED_VAULT_ENCRYPTION_KEY",
       expected: "64 hex characters",
@@ -129,8 +127,16 @@ function getSupabaseConfig(): SupabaseConfig {
   return {
     url: rawUrl.replace(/\/+$/, ""),
     anonKey,
-    encryptionKey: Buffer.from(encryptionKey, "hex"),
+    encryptionKey: encryptionKey ? Buffer.from(encryptionKey, "hex") : null,
   };
+}
+
+function requireEncryptionKey(config: SupabaseConfig): Buffer {
+  if (!config.encryptionKey) {
+    console.error("[Published Vaults] Configuration error:", { code: "MISSING_PUBLISHED_VAULT_ENCRYPTION_KEY" });
+    throw new PublishedVaultStorageError("MISSING_PUBLISHED_VAULT_ENCRYPTION_KEY", "configuration");
+  }
+  return config.encryptionKey;
 }
 
 function supabaseHeaders(config: SupabaseConfig, extra: Record<string, string> = {}) {
@@ -376,13 +382,37 @@ export async function getPublishedVault(id: string): Promise<PublishedVaultRecor
   return record;
 }
 
-export async function getPublishedVaultDataset(record: PublishedVaultRecord): Promise<string | null> {
-  const config = getSupabaseConfig();
+async function downloadDatasetBlob(config: SupabaseConfig, record: PublishedVaultRecord): Promise<unknown> {
   const response = await supabaseFetch(storageObjectUrl(config, record.fileRef), {
     headers: supabaseHeaders(config),
   }, "dataset-download");
-  const encrypted = await supabaseJson<unknown>(response, "dataset-download");
-  const dataset = decryptDataset(encrypted, config.encryptionKey);
+  return supabaseJson<unknown>(response, "dataset-download");
+}
+
+/**
+ * Enclave mode: the stored dataset exactly as sealed by the publisher's
+ * browser. This server cannot open it. Returns "legacy" for datasets stored
+ * before enclave mode, which must be migrated (scripts/migrate-vaults-to-enclave.mjs).
+ */
+export async function getPublishedVaultSealedDataset(record: PublishedVaultRecord): Promise<SealedDataset | "legacy" | null> {
+  const blob = await downloadDatasetBlob(getSupabaseConfig(), record);
+  if (isSealedDataset(blob)) return blob;
+  if (typeof blob === "object" && blob !== null && (blob as { version?: unknown }).version === 1) return "legacy";
+  return null;
+}
+
+/** Direct mode: decrypts a dataset stored with the server-side key. */
+export async function getPublishedVaultDataset(record: PublishedVaultRecord): Promise<string | null> {
+  const config = getSupabaseConfig();
+  const encrypted = await downloadDatasetBlob(config, record);
+  if (isSealedDataset(encrypted)) {
+    console.error("[Published Vaults] Dataset is sealed to the enclave; enable enclave mode to answer it.", {
+      stage: "dataset-decryption",
+      code: "DATASET_SEALED_TO_ENCLAVE",
+    });
+    return null;
+  }
+  const dataset = decryptDataset(encrypted, requireEncryptionKey(config));
   if (!dataset) {
     console.error("[Published Vaults] Encrypted dataset could not be decrypted.", {
       stage: "dataset-decryption",
@@ -392,16 +422,21 @@ export async function getPublishedVaultDataset(record: PublishedVaultRecord): Pr
   return dataset;
 }
 
-async function uploadEncryptedDataset(
+/**
+ * Uploads a dataset blob. If the upload response is lost, checks whether the
+ * object landed anyway (`landed` compares what's stored with what was sent).
+ */
+async function uploadDatasetBlob(
   config: SupabaseConfig,
   fileReference: string,
-  dataset: string,
+  body: string,
+  landed: (stored: unknown) => boolean,
 ) {
   try {
     const response = await supabaseFetch(storageObjectUrl(config, fileReference), {
       method: "POST",
       headers: supabaseHeaders(config, { "Content-Type": "application/json" }),
-      body: encryptDataset(dataset, config.encryptionKey),
+      body,
     }, "dataset-upload");
     await supabaseJson<unknown>(response, "dataset-upload");
   } catch (error) {
@@ -410,8 +445,8 @@ async function uploadEncryptedDataset(
       const response = await supabaseFetch(storageObjectUrl(config, fileReference), {
         headers: supabaseHeaders(config),
       }, "dataset-upload-recovery");
-      const encrypted = await supabaseJson<unknown>(response, "dataset-upload-recovery");
-      if (decryptDataset(encrypted, config.encryptionKey) === dataset) return;
+      const stored = await supabaseJson<unknown>(response, "dataset-upload-recovery");
+      if (landed(stored)) return;
     } catch {
       throw error;
     }
@@ -451,13 +486,16 @@ export async function createPublishedVault(input: {
   priceNear: string;
   publisherAddress: string;
   payoutAddress: string;
-  dataset: string;
+  /** Direct mode: plaintext, encrypted here with the server-side key. */
+  dataset?: string;
+  /** Enclave mode: sealed in the browser, row count reported by the enclave. */
+  sealed?: { dataset: SealedDataset; rowCount: number };
   /** Verified publishing-fee transaction; recorded so it can't be reused. */
   publishFeeTxHash?: string | null;
 }): Promise<MarketplaceVault> {
   const title = input.title.trim();
   const description = input.description.trim();
-  const dataset = input.dataset.trim();
+  const dataset = input.dataset?.trim() ?? "";
   const priceNear = input.priceNear.trim();
   const publisherAddress = input.publisherAddress.trim();
   const payoutAddress = input.payoutAddress.trim();
@@ -468,12 +506,28 @@ export async function createPublishedVault(input: {
     throw new Error("A valid NEAR publisher and payout account are required.");
   }
   nearToYocto(priceNear);
-  if (!dataset || Buffer.byteLength(dataset, "utf8") > MAX_DATASET_BYTES) {
-    throw new Error("Choose a non-empty dataset smaller than 500 KB.");
-  }
 
-  const prepared = prepareDataset(dataset);
   const config = getSupabaseConfig();
+  let blob: string;
+  let rowCount: number;
+  let landed: (stored: unknown) => boolean;
+  if (input.sealed) {
+    blob = JSON.stringify(input.sealed.dataset);
+    // base64 grows data by a third; allow the sealing overhead on top.
+    if (Buffer.byteLength(input.sealed.dataset.ciphertext, "base64") > MAX_DATASET_BYTES + 64) {
+      throw new Error("Choose a non-empty dataset smaller than 500 KB.");
+    }
+    rowCount = input.sealed.rowCount;
+    landed = (stored) => isSealedDataset(stored) && stored.ciphertext === input.sealed?.dataset.ciphertext;
+  } else {
+    if (!dataset || Buffer.byteLength(dataset, "utf8") > MAX_DATASET_BYTES) {
+      throw new Error("Choose a non-empty dataset smaller than 500 KB.");
+    }
+    const key = requireEncryptionKey(config);
+    rowCount = prepareDataset(dataset).rowCount;
+    blob = encryptDataset(dataset, key);
+    landed = (stored) => decryptDataset(stored, key) === dataset;
+  }
   const publishFeeTxHash = input.publishFeeTxHash?.trim() || null;
   if (publishFeeTxHash && await isPublishFeeUsed(config, publishFeeTxHash)) {
     throw new PublishFeeAlreadyUsedError();
@@ -481,9 +535,10 @@ export async function createPublishedVault(input: {
   const fileReference = `${randomUUID()}.json`;
   console.info("[Published Vaults] Publishing vault:", {
     stage: "dataset-upload",
-    bytes: Buffer.byteLength(dataset, "utf8"),
+    bytes: Buffer.byteLength(blob, "utf8"),
+    sealedToEnclave: Boolean(input.sealed),
   });
-  await uploadEncryptedDataset(config, fileReference, dataset);
+  await uploadDatasetBlob(config, fileReference, blob, landed);
   console.info("[Published Vaults] Dataset uploaded; inserting metadata.", { stage: "vault-insert" });
 
   const query = new URLSearchParams({
@@ -533,11 +588,11 @@ export async function createPublishedVault(input: {
       throw new PublishedVaultStorageError("SUPABASE_INVALID_RESPONSE", "vault-insert");
     }
     console.info("[Published Vaults] Vault published.", { stage: "vault-insert", id: record.id });
-    return toPublishedVaultListing({ ...record, rowCount: prepared.rowCount });
+    return toPublishedVaultListing({ ...record, rowCount });
   } catch (error) {
     const existing = await findPublishedVaultByFile(config, fileReference).catch(() => null);
     if (existing && matchesPublishedInput(existing, recordInput)) {
-      return toPublishedVaultListing({ ...existing, rowCount: prepared.rowCount });
+      return toPublishedVaultListing({ ...existing, rowCount });
     }
     // 409 = the unique index on publish_fee_tx caught a concurrent reuse.
     if (error instanceof PublishedVaultStorageError && error.status === 409 && publishFeeTxHash) {

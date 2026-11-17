@@ -50,8 +50,10 @@ Hackathon write-up (Track 3, Privacy & Private AI): [HACKATHON.md](HACKATHON.md)
 | Publishing | Upload CSV, TXT or Markdown files (up to 500 KB combined) and pay a one-time 0.05 NEAR fee. The dataset is encrypted with AES-256-GCM into a private Supabase bucket; only metadata is listed. |
 | Unpublishing | Only the publisher can remove a vault, proven with a fresh NEP-413 wallet signature that is verified on chain. |
 | Sample datasets | Three synthetic datasets in server-only code. The browser only sends a `vaultId`. |
-| Anti-probing | Best effort: in-memory query history and pattern checks per server instance. Only keyed hashes of each question and its words are kept, never the question text. |
-| Replay protection | Best effort for query payments (in-memory, per instance). Publishing fees are single-use, enforced by a unique database column. |
+| Aggregate-only answers | Questions asking for raw records are refused before inference, the model is instructed to answer with aggregates, and answers that reproduce records, quote long passages, come back as tables or contain personal identifiers are withheld. A refused or withheld answer doesn't use up the payment. |
+| Anti-probing | Query history and pattern checks per account and per IP. Only keyed hashes of each question and its words are kept, never the question text. Shared across instances through Upstash Redis when configured. |
+| Replay protection | Used payments are claimed atomically in Upstash Redis (in-memory fallback without it), and each payment is tied to one question. Publishing fees are single-use, enforced by a unique database column. |
+| Enclave mode | Built, and on when `ENCLAVE_URL` is set (see [enclave/README.md](enclave/README.md)). Datasets are sealed in the publisher's browser to a BlindSight enclave on Phala Cloud (Intel TDX), whose attestation, code hash and response signatures the server verifies. The web server never sees dataset plaintext. |
 
 There are no mock balances, fake transaction hashes or fabricated attestation tokens. If testnet
 NEAR is needed, use the [NEAR testnet faucet](https://near-faucet.io/).
@@ -153,7 +155,12 @@ Open [http://localhost:3000](http://localhost:3000).
 | `NEXT_PUBLIC_BLINDSIGHT_PUBLISH_FEE_NEAR` | Optional | One-time publishing fee. Default `0.05`; `0` disables it. |
 | `SUPABASE_URL` | For publishing | Supabase project URL. |
 | `SUPABASE_ANON_KEY` | For publishing | Used only server-side. |
-| `PUBLISHED_VAULT_ENCRYPTION_KEY` | For publishing | Stable 32-byte hex key for AES-256-GCM. Back it up: changing it makes existing uploads unreadable. |
+| `PUBLISHED_VAULT_ENCRYPTION_KEY` | Direct mode publishing | Stable 32-byte hex key for AES-256-GCM. Back it up: changing it makes existing uploads unreadable. Not needed once all vaults are in the enclave. |
+| `KV_REST_API_URL`, `KV_REST_API_TOKEN` | Recommended | Upstash Redis for shared replay protection and rate limits. Added automatically by Vercel's Upstash integration. `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` also work. |
+| `ENCLAVE_URL` | Enclave mode | URL of the BlindSight enclave on Phala Cloud. Setting it turns enclave mode on. |
+| `ENCLAVE_API_TOKEN` | Enclave mode | Shared secret for calls to the enclave (32+ characters). |
+| `ENCLAVE_COMPOSE_HASH` | Enclave mode | Pinned code hash of the enclave build. The server refuses any other build. |
+| `ENCLAVE_APP_ID` | Optional | Also pin the Phala app ID. |
 
 To enable publishing, run [`supabase/schema.sql`](supabase/schema.sql) in the Supabase SQL Editor.
 It creates the `vaults` table, the private `vault-datasets` bucket and their policies. It is safe
@@ -187,6 +194,8 @@ app/
   api/
     query-tee/route.ts       Verify payments, load dataset, private inference
     vaults/route.ts          List, publish (fee-verified) and unpublish (signature-verified)
+    enclave/route.ts         Verified enclave identity and raw attestation (public)
+    enclave/validate/route.ts  Check a sealed dataset inside the enclave before paying
     vault/parse/route.ts     Text and PDF extraction
     verify-payment/route.ts  Standalone transfer check (optional for agents)
 components/
@@ -196,7 +205,13 @@ components/
   InfoPage.tsx, SiteFooter.tsx   Docs/privacy page shell and shared footer
   ConnectModal.tsx, WalletProvider.tsx
 lib/
-  privateInference.ts        TDX attestation, OHTTP/HPKE, enclave signature checks
+  privateInference.ts        NEAR AI TDX attestation, OHTTP/HPKE, enclave signature checks
+  privateAnswer.ts           Prompt, retries and output guard (shared with the enclave)
+  answerGuard.ts             Aggregate-only checks for questions and answers
+  sharedStore.ts             Upstash Redis (or memory) for payments and rate limits
+  enclaveProtocol.ts         Sealed-dataset format, attestation binding, response signatures
+  enclaveClient.ts           Verifies the BlindSight enclave and its signed responses
+  sealBrowser.ts             Seals datasets to the enclave in the browser (WebCrypto)
   paymentVerification.ts     On-chain transfer verification
   platformFees.ts            Query and publishing fees
   near-transfers.ts          Wallet signing, batched transfers
@@ -204,6 +219,8 @@ lib/
   vaultOwnership.ts, verifyVaultOwner.ts   NEP-413 unpublish proofs
   demoVaults.ts, demoVaultDatasets.ts      Sample vaults (datasets server-only)
   datasetQuality.ts          Dataset preparation and cache
+enclave/                     BlindSight enclave service for Phala Cloud (Dockerfile, compose, guide)
+scripts/migrate-vaults-to-enclave.mjs   Re-seals pre-enclave vaults to the enclave
 supabase/schema.sql          Tables, bucket, policies
 ```
 
@@ -230,8 +247,12 @@ supabase/schema.sql          Tables, bucket, policies
 - `payment`, the verified transfer details
 - `privacy`, the receipt: `attested`, `encryptedToEnclave`, `responseSigned`, the TCB statuses,
   the GPU verdict, the attestation nonce, the signer key, and the request and response hashes
+- `enclave` (enclave mode only): the verified code hash, app ID, TCB status and signing key of the
+  BlindSight enclave that opened the dataset
 
 Failures return `{ success: false, error, code }` with a 4xx or 5xx status.
+`QUESTION_NOT_AGGREGATE` and `ANSWER_WITHHELD` mean the aggregate-only checks applied; the payment
+can be reused with a different question.
 
 ### `GET /api/vaults` · `POST /api/vaults` · `DELETE /api/vaults`
 
@@ -251,15 +272,20 @@ Any agent with a NEAR testnet key can use the same flow without a browser:
 
 ## Security and limitations
 
-- **BlindSight's server is not an enclave.** It decrypts published datasets in memory to build
-  the prompt. The path from BlindSight to the model is attested, encrypted and signed, but
-  publishers must trust BlindSight's server with their data. Moving this step into a TEE is the
-  next milestone.
+- **Without enclave mode, BlindSight's server is not an enclave.** It decrypts published
+  datasets in memory to build the prompt. The path to the model is attested, encrypted and
+  signed, but publishers must trust BlindSight's server with their data.
+- **With enclave mode**, publishers trust Phala's OS image and key service instead, and the app
+  owner's control over upgrades. The server checks the enclave's TDX quote, its RTMR3 log and a
+  pinned code hash, but not MRTD/RTMR0-2 against Phala's OS measurements. Raw evidence is at
+  `/api/enclave` for independent checks. Questions reach the enclave over TLS that ends in
+  Phala's gateway TEE.
 - **No escrow contract.** Transfers settle directly to recipients on testnet.
-- **Replay protection and anti-probing are per instance and in memory**, and reset on cold
-  starts.
-- **Anti-probing is heuristic.** It raises the cost of reconstructing a dataset but doesn't
-  prevent it.
+- **Shared state needs Redis.** Without Upstash configured, replay protection and anti-probing
+  are per instance and in memory, and reset on cold starts.
+- **Aggregate-only checks and anti-probing are heuristics.** They stop bulk copying and obvious
+  leaks and raise the cost of reconstruction, but many narrow aggregate questions can still
+  reveal individual records.
 
 Use synthetic or non-sensitive data. Don't upload real personal, medical, financial or
 confidential data.

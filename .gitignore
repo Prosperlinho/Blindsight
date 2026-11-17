@@ -42,3 +42,8 @@ yarn-error.log*
 next-env.d.ts
 
 .vercel
+
+# enclave service build output
+/enclave/node_modules/
+/enclave/dist/
+/enclave/*.env

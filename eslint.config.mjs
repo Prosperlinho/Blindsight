@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Enclave service dependencies and build output.
+    "enclave/node_modules/**",
+    "enclave/dist/**",
   ]),
 ]);
 

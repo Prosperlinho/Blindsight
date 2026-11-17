@@ -5,6 +5,23 @@ import type { PrivacyReceipt as PrivacyReceiptData } from "@/lib/privateInferenc
 
 export type { PrivacyReceiptData };
 
+/** Enclave mode: the vault was opened only inside the attested BlindSight enclave. */
+export type DatasetEnclaveData = {
+  verified: true;
+  composeHash: string;
+  appId: string | null;
+  tcbStatus: string;
+  verifiedAt: string;
+  signPublicKey: string;
+};
+
+export function parseDatasetEnclave(value: unknown): DatasetEnclaveData | null {
+  if (typeof value !== "object" || value === null) return null;
+  const enclave = value as Partial<DatasetEnclaveData>;
+  if (enclave.verified !== true || typeof enclave.composeHash !== "string" || typeof enclave.verifiedAt !== "string") return null;
+  return enclave as DatasetEnclaveData;
+}
+
 /** Narrows an untrusted API value to a receipt, or null. */
 export function parsePrivacyReceipt(value: unknown): PrivacyReceiptData | null {
   if (typeof value !== "object" || value === null) return null;
@@ -36,7 +53,13 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
-export default function PrivacyReceipt({ receipt }: { receipt: PrivacyReceiptData }) {
+export default function PrivacyReceipt({
+  receipt,
+  datasetEnclave = null,
+}: {
+  receipt: PrivacyReceiptData;
+  datasetEnclave?: DatasetEnclaveData | null;
+}) {
   const fullyVerified = receipt.attested && receipt.encryptedToEnclave && receipt.responseSigned;
   if (!receipt.attested) return null;
 
@@ -75,6 +98,11 @@ export default function PrivacyReceipt({ receipt }: { receipt: PrivacyReceiptDat
           {receipt.modelNonceBound ? " · enclave verified" : " · enclave reported"}
           {receipt.gpuVerdict && <> · GPU {receipt.gpuVerdict === "PASS" ? "passed" : receipt.gpuVerdict}</>}
         </Row>
+        <Row label="Vault data opened">
+          {datasetEnclave
+            ? <>Only inside the BlindSight enclave (Intel TDX {datasetEnclave.tcbStatus === "UpToDate" ? "up to date" : datasetEnclave.tcbStatus}), code <span className="font-mono">{shorten(datasetEnclave.composeHash, 10)}</span></>
+            : "On BlindSight's server"}
+        </Row>
         <Row label="Question encrypted">{receipt.encryptedToEnclave ? "Yes, to the enclave's attested key" : "No, sent over standard HTTPS"}</Row>
         <Row label="Answer signed">
           {receipt.responseSigned ? <>Yes, by enclave key <span className="font-mono">{shorten(receipt.signer)}</span></> : "Not confirmed"}
@@ -84,9 +112,11 @@ export default function PrivacyReceipt({ receipt }: { receipt: PrivacyReceiptDat
         <Row label="Freshness proof"><span className="font-mono">{shorten(receipt.attestationNonce, 12)}</span></Row>
       </dl>
       <p className="border-t border-white/10 px-4 py-3 text-xs leading-5 text-slate-500">
-        BlindSight checked the enclave&apos;s Intel attestation with a one-time code, sent your question encrypted to
-        it, and confirmed the enclave&apos;s signature over this exact question and answer. The vault data is
-        decrypted on BlindSight&apos;s server to build the question, which isn&apos;t enclave-protected yet.
+        BlindSight checked the AI enclave&apos;s Intel attestation with a one-time code, sent your question encrypted to
+        it, and confirmed the enclave&apos;s signature over this exact question and answer.{" "}
+        {datasetEnclave
+          ? <>The vault data was decrypted only inside BlindSight&apos;s own attested enclave, which built the question and signed this result. BlindSight&apos;s web server never saw the data.</>
+          : <>The vault data is decrypted on BlindSight&apos;s server to build the question, which isn&apos;t enclave-protected.</>}
       </p>
     </details>
   );

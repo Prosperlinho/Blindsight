@@ -10,6 +10,8 @@ import {
 import { PaymentVerificationError, verifyNearTransfer } from "@/lib/paymentVerification";
 import { feeToYocto, getPlatformTreasury, getPublishFeeNear, isFeeEnabled } from "@/lib/platformFees";
 import { VaultOwnershipError, verifyUnpublishProof, type UnpublishProof } from "@/lib/verifyVaultOwner";
+import { isSealedDataset, type EnclaveValidateResponse, type SealedDataset } from "@/lib/enclaveProtocol";
+import { callEnclave, EnclaveError, getVerifiedEnclave, isEnclaveMode } from "@/lib/enclaveClient";
 
 const PROOF_FIELDS = ["vaultId", "accountId", "publicKey", "signature", "nonce", "message"] as const;
 
@@ -103,9 +105,45 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid vault details." }, { status: 400 });
   }
 
-  const { title, description, priceNear, publisherAddress, payoutAddress, dataset } = body;
-  if ([title, description, priceNear, publisherAddress, payoutAddress, dataset].some((value) => typeof value !== "string")) {
+  const { title, description, priceNear, publisherAddress, payoutAddress, dataset, sealedDataset } = body;
+  if ([title, description, priceNear, publisherAddress, payoutAddress].some((value) => typeof value !== "string")) {
     return NextResponse.json({ error: "Complete all required vault details." }, { status: 400 });
+  }
+
+  // Enclave mode: the dataset arrives sealed to the enclave by the publisher's
+  // browser. This server never sees the plaintext and refuses it if sent.
+  const enclaveMode = isEnclaveMode();
+  if (enclaveMode && !isSealedDataset(sealedDataset)) {
+    return NextResponse.json(
+      { error: "Datasets must be encrypted for the enclave before upload. Reload the page and try again.", code: "SEALED_DATASET_REQUIRED" },
+      { status: 400, headers: PRIVATE_HEADERS },
+    );
+  }
+  if (!enclaveMode && typeof dataset !== "string") {
+    return NextResponse.json({ error: "Complete all required vault details." }, { status: 400 });
+  }
+  let sealed: { dataset: SealedDataset; rowCount: number } | undefined;
+  if (enclaveMode && isSealedDataset(sealedDataset)) {
+    try {
+      const enclave = await getVerifiedEnclave();
+      if (sealedDataset.enclaveKey !== enclave.sealPublicKey.toString("base64")) {
+        return NextResponse.json(
+          { error: "The enclave key changed. Reload the page and try again.", code: "ENCLAVE_KEY_CHANGED" },
+          { status: 409, headers: PRIVATE_HEADERS },
+        );
+      }
+      const check = await callEnclave<EnclaveValidateResponse>("/validate", { dataset: { kind: "sealed", sealed: sealedDataset } }, 20_000);
+      if (!check.ok) {
+        return NextResponse.json({ error: check.error, code: "DATASET_REJECTED" }, { status: 422, headers: PRIVATE_HEADERS });
+      }
+      sealed = { dataset: sealedDataset, rowCount: check.rowCount };
+    } catch (error) {
+      console.error("[Published Vaults] Enclave validation failed.", { stage: error instanceof EnclaveError ? error.stage : "unknown" });
+      return NextResponse.json(
+        { error: "The BlindSight enclave couldn't be reached. Try again in a moment.", code: "ENCLAVE_UNAVAILABLE" },
+        { status: 503, headers: PRIVATE_HEADERS },
+      );
+    }
   }
 
   // One-time publishing fee: a transfer from the publisher's own account to the
@@ -148,7 +186,7 @@ export async function POST(request: Request) {
       priceNear: priceNear as string,
       publisherAddress: publisherAddress as string,
       payoutAddress: payoutAddress as string,
-      dataset: dataset as string,
+      ...(sealed ? { sealed } : { dataset: dataset as string }),
       publishFeeTxHash,
     });
     return NextResponse.json({ vault }, { status: 201, headers: PRIVATE_HEADERS });

@@ -6,7 +6,7 @@ export const metadata: Metadata = {
   description: "What data BlindSight handles, where it goes and how long it is kept.",
 };
 
-const LAST_UPDATED = "November 15, 2026";
+const LAST_UPDATED = "November 17, 2026";
 
 const SECTIONS = [
   { id: "summary", title: "Summary" },
@@ -44,8 +44,13 @@ export default function PrivacyPage() {
             after your request finishes.
           </li>
           <li>
-            Published datasets are encrypted at rest and deleted when you unpublish. BlindSight&apos;s server can
-            decrypt them to answer questions.
+            Answers are aggregate-only: BlindSight refuses questions that ask for raw records and withholds answers
+            that reproduce them.
+          </li>
+          <li>
+            Published datasets are encrypted at rest and deleted when you unpublish. In enclave mode they are
+            encrypted in your browser and can only be opened inside BlindSight&apos;s attested enclave; otherwise
+            BlindSight&apos;s server can decrypt them to answer questions.
           </li>
           <li>We don&apos;t sell or share your data for marketing.</li>
         </ul>
@@ -63,17 +68,24 @@ export default function PrivacyPage() {
         </p>
         <p>
           To verify a payment, the server looks up the transaction on a public RPC node. It keeps the transaction
-          hash in memory for up to 24 hours to stop the same payment being used twice. Publishing-fee
-          transaction hashes are stored with the vault listing for as long as the vault exists.
+          hash for up to 24 hours to stop the same payment being used twice, together with a keyed hash of the
+          question it paid for. These are held in server memory or in BlindSight&apos;s Redis database (Upstash),
+          so every server instance sees them. Publishing-fee transaction hashes are stored with the vault listing
+          for as long as the vault exists.
         </p>
       </InfoSection>
 
       <InfoSection id="questions" title="Questions and answers">
-        <p>When you ask a question, BlindSight&apos;s server:</p>
+        <p>When you ask a question, BlindSight:</p>
         <ol>
           <li>
+            Refuses it if it plainly asks for raw records or an individual&apos;s details. Your payment stays valid
+            for a different question.
+          </li>
+          <li>
             Combines it with the vault&apos;s dataset into a prompt and sends it to NEAR AI Cloud, where the model
-            runs inside an attested hardware enclave.
+            runs inside an attested hardware enclave. In enclave mode this happens inside BlindSight&apos;s own
+            attested enclave, not on its web server.
           </li>
           <li>
             Encrypts that prompt with Oblivious HTTP to a key held by the verified enclave, so NEAR AI&apos;s
@@ -85,8 +97,14 @@ export default function PrivacyPage() {
             To detect attempts to reconstruct a dataset through many narrow questions, it keeps a short record
             for up to 10 minutes. The record holds keyed hashes of the question and of its words, and whether
             it looked like an extraction attempt. It is grouped by your account ID and the vault, and separately
-            by a hash of your IP address and the vault. It never contains the question text. The hashing key is
-            random, exists only in that server&apos;s memory, and changes whenever the server restarts.
+            by a hash of your IP address and the vault. It never contains the question text. It is held in server
+            memory or in BlindSight&apos;s Redis database (Upstash), and the hashing key never leaves BlindSight&apos;s
+            servers.
+          </li>
+          <li>
+            Checks the answer before releasing it. Answers that repeat most of a record, list many records, quote
+            long passages, come back as a table, or contain a personal identifier from the dataset are withheld,
+            and your payment stays valid for a different question.
           </li>
         </ol>
         <p>
@@ -107,15 +125,26 @@ export default function PrivacyPage() {
             publishing-fee transaction and the publish date. These are shown to every visitor.
           </li>
           <li>
-            <strong>Encrypted:</strong> the dataset contents, including the names of the files you uploaded. They
-            are encrypted with AES-256-GCM before being stored in a private Supabase storage bucket.
+            <strong>Encrypted:</strong> the dataset contents, including the names of the files you uploaded,
+            stored in a private Supabase storage bucket.
           </li>
         </ul>
         <p>
-          BlindSight&apos;s server holds the encryption key. To answer a question it decrypts the dataset in
-          memory and may keep the prepared copy in memory for up to 30 minutes. The server itself is not an
-          enclave, so you are trusting BlindSight with the contents. Parts of the dataset are sent to the model
-          as described above, and answers are generated from it, so information from the dataset can appear in
+          <strong>In enclave mode</strong>, your browser encrypts the dataset to a key that exists only inside
+          BlindSight&apos;s enclave, a confidential virtual machine (Intel TDX) on Phala Cloud. BlindSight&apos;s web
+          server checks the enclave&apos;s hardware attestation before every use, stores only the encrypted file and
+          never sees its contents. The enclave decrypts the dataset in memory only to answer a question. The answer
+          receipt says <strong>Vault data opened: only inside the BlindSight enclave</strong> when this applies,
+          and the enclave&apos;s attestation is published at <code>/api/enclave</code>.
+        </p>
+        <p>
+          <strong>Otherwise</strong>, the dataset is encrypted with AES-256-GCM using a key held by BlindSight&apos;s
+          server, which decrypts it in memory to answer a question and may keep the prepared copy in memory for up
+          to 30 minutes. That server is not an enclave, so you are trusting BlindSight with the contents.
+        </p>
+        <p>
+          Either way, parts of the dataset are sent to the model as described above and answers are generated from
+          it. The aggregate-only checks reduce, but can&apos;t rule out, information from the dataset appearing in
           answers.
         </p>
         <p>
@@ -172,6 +201,17 @@ export default function PrivacyPage() {
               <td>Vault listings and encrypted dataset files.</td>
             </tr>
             <tr>
+              <td>Phala Cloud (enclave mode)</td>
+              <td>
+                Runs BlindSight&apos;s enclave, which receives encrypted datasets and questions. Their contents are
+                readable only inside the confidential VM.
+              </td>
+            </tr>
+            <tr>
+              <td>Upstash</td>
+              <td>Used payment hashes and anti-probing hashes. No question text, datasets or answers.</td>
+            </tr>
+            <tr>
               <td>FastNear RPC</td>
               <td>Account and transaction lookups, from your browser and from our server.</td>
             </tr>
@@ -201,16 +241,20 @@ export default function PrivacyPage() {
               <td>Only while your request is being answered</td>
             </tr>
             <tr>
-              <td>Anti-probing hashes (in memory, no question text)</td>
-              <td>Up to 10 minutes, or until the server instance restarts</td>
+              <td>Anti-probing hashes (no question text)</td>
+              <td>Up to 10 minutes</td>
             </tr>
             <tr>
-              <td>Prepared dataset copy (in memory)</td>
+              <td>Prepared dataset copy (in memory, direct mode only)</td>
               <td>Up to 30 minutes, or until the server instance restarts</td>
             </tr>
             <tr>
-              <td>Used payment hashes (in memory)</td>
-              <td>Up to 24 hours, or until the server instance restarts</td>
+              <td>Used payment hashes</td>
+              <td>Up to 24 hours</td>
+            </tr>
+            <tr>
+              <td>Payment-to-question binding (keyed hash)</td>
+              <td>Up to 3 hours</td>
             </tr>
             <tr>
               <td>Vault listing and encrypted dataset</td>

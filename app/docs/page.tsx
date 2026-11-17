@@ -11,7 +11,9 @@ const SECTIONS = [
   { id: "overview", title: "Overview" },
   { id: "getting-started", title: "Getting started" },
   { id: "asking", title: "Asking a question" },
+  { id: "aggregate-only", title: "Aggregate-only answers" },
   { id: "receipt", title: "The privacy receipt" },
+  { id: "enclave-mode", title: "Enclave mode" },
   { id: "publishing", title: "Publishing a vault" },
   { id: "unpublishing", title: "Removing a vault" },
   { id: "fees", title: "Prices and fees" },
@@ -101,6 +103,35 @@ export default function DocsPage() {
         </p>
       </InfoSection>
 
+      <InfoSection id="aggregate-only" title="Aggregate-only answers">
+        <p>
+          BlindSight sells insights, not records. Ask for totals, averages, ranges, rankings, trends and
+          comparisons between groups. An answer may name a group, period or finding and cite a few figures to
+          support it.
+        </p>
+        <ul>
+          <li>
+            <strong>Before inference</strong>, questions that plainly ask for raw records are refused: listing or
+            exporting rows, &ldquo;as CSV/JSON/table&rdquo;, &ldquo;first 10 rows&rdquo;, verbatim copies, or an
+            individual&apos;s email, phone or address.
+          </li>
+          <li>
+            <strong>The model is instructed</strong> to answer with aggregates and never to list records,
+            reproduce one in full, output tables or reveal personal identifiers.
+          </li>
+          <li>
+            <strong>After inference</strong>, the answer is checked against the dataset and withheld if it repeats
+            most of a record&apos;s distinctive values, lists values from more than three records, cites more than
+            twelve distinctive values in total, quotes long passages verbatim, comes back as a table, or contains
+            a personal identifier, email or account ID from the dataset.
+          </li>
+        </ul>
+        <p>
+          A refused or withheld answer doesn&apos;t use up your payment. Edit your question and choose{" "}
+          <strong>Ask edited question</strong> to try again with the same payment.
+        </p>
+      </InfoSection>
+
       <InfoSection id="receipt" title="The privacy receipt">
         <p>
           Each answer carries a <strong>Verified private answer</strong> badge. Open <strong>Details</strong> to
@@ -124,6 +155,13 @@ export default function DocsPage() {
             <tr>
               <td>Model &amp; GPU</td>
               <td>The model attestation and the NVIDIA GPU verdict.</td>
+            </tr>
+            <tr>
+              <td>Vault data opened</td>
+              <td>
+                In enclave mode: <em>only inside the BlindSight enclave</em>, with the measured hash of the code it
+                runs. Otherwise: on BlindSight&apos;s server.
+              </td>
             </tr>
             <tr>
               <td>Encrypted to enclave</td>
@@ -154,6 +192,38 @@ export default function DocsPage() {
         </p>
       </InfoSection>
 
+      <InfoSection id="enclave-mode" title="Enclave mode">
+        <p>
+          In enclave mode, BlindSight&apos;s own web server never sees a published dataset. A small BlindSight
+          service runs in a confidential virtual machine (Intel TDX) on Phala Cloud, and it is the only place
+          datasets are decrypted.
+        </p>
+        <ol>
+          <li>
+            The enclave derives its keys inside the TEE from Phala&apos;s key service. It publishes a hardware
+            quote that binds those keys to the exact code it runs.
+          </li>
+          <li>
+            BlindSight&apos;s server verifies that quote with a fresh nonce against Intel&apos;s certificate chain,
+            replays its measurement log, and checks that the code hash matches the published BlindSight build.
+          </li>
+          <li>
+            When you publish, your browser encrypts the dataset to the verified enclave key (X25519 and
+            AES-256-GCM). Only the encrypted file is uploaded.
+          </li>
+          <li>
+            To answer a question, the enclave decrypts the dataset, builds the prompt, asks NEAR AI over the same
+            attested, encrypted channel, applies the aggregate-only checks and signs its result. The server
+            accepts only results signed by the attested enclave key.
+          </li>
+        </ol>
+        <p>
+          You can check the enclave yourself: <code>GET /api/enclave</code> returns its keys, code hash, TDX quote,
+          measurement log and <code>app-compose.json</code>. Each answer&apos;s receipt shows whether enclave mode
+          was used.
+        </p>
+      </InfoSection>
+
       <InfoSection id="publishing" title="Publishing a vault">
         <ol>
           <li>Open the <strong>Publish</strong> tab in the marketplace.</li>
@@ -164,9 +234,12 @@ export default function DocsPage() {
           </li>
           <li>Set a price per question and the account that should receive payments.</li>
           <li>
-            Approve the one-time publishing fee. Once it confirms on chain, the dataset is encrypted with
-            AES-256-GCM and stored in a private bucket. Only the title, description, price and account names
-            are listed publicly.
+            In enclave mode, your browser encrypts the dataset to the enclave and the enclave checks it can read
+            it, before you pay anything.
+          </li>
+          <li>
+            Approve the one-time publishing fee. Once it confirms on chain, the encrypted dataset is stored in a
+            private bucket. Only the title, description, price and account names are listed publicly.
           </li>
         </ol>
         <p>
@@ -174,8 +247,8 @@ export default function DocsPage() {
           step.
         </p>
         <p>
-          <strong>Use synthetic or non-sensitive data.</strong> BlindSight&apos;s own server decrypts the
-          dataset in memory to build the prompt, so you are trusting that server with it. See{" "}
+          <strong>Use synthetic or non-sensitive data.</strong> Outside enclave mode, BlindSight&apos;s own server
+          decrypts the dataset in memory to build the prompt, so you are trusting that server with it. See{" "}
           <a href="#limits">Limits</a>.
         </p>
       </InfoSection>
@@ -239,7 +312,8 @@ export default function DocsPage() {
           A successful response contains <code>insight</code> (the answer), <code>receiptId</code>,{" "}
           <code>payment</code> (the verified transfers) and <code>privacy</code> (the receipt fields:{" "}
           <code>attested</code>, <code>encryptedToEnclave</code>, <code>responseSigned</code>, TCB statuses, GPU
-          verdict, nonce, signer key and hashes). Errors return{" "}
+          verdict, nonce, signer key and hashes). In enclave mode it also contains <code>enclave</code>: the
+          verified code hash, app ID, TCB status and signing key of the BlindSight enclave. Errors return{" "}
           <code>{`{ success: false, error, code }`}</code> with a 4xx or 5xx status.
         </p>
         <h3>Other endpoints</h3>
@@ -257,19 +331,33 @@ export default function DocsPage() {
           <li>
             <code>POST /api/verify-payment</code> checks a transfer on its own, without running a question.
           </li>
+          <li>
+            <code>GET /api/enclave</code> returns the verified enclave identity and raw attestation evidence.
+          </li>
+          <li>
+            <code>POST /api/enclave/validate</code> checks a sealed dataset inside the enclave before publishing.
+          </li>
         </ul>
         <p>
           The server verifies that each transfer is finalized and successful, was signed by the payer, went to
-          the right receiver, covers the price, is under two hours old and hasn&apos;t been used before.
+          the right receiver, covers the price, is under two hours old and hasn&apos;t been used before. A payment
+          is tied to the first question asked with it. Codes <code>QUESTION_NOT_AGGREGATE</code> and{" "}
+          <code>ANSWER_WITHHELD</code> mean the aggregate-only checks applied and the payment can be reused with a
+          different question.
         </p>
       </InfoSection>
 
       <InfoSection id="limits" title="Limits">
         <ul>
           <li>
-            <strong>BlindSight&apos;s server is not an enclave.</strong> The path from BlindSight to the model is
-            attested, encrypted and signed, but the server decrypts published datasets in memory to build the
-            prompt. Moving that step into a TEE is the next milestone.
+            <strong>Outside enclave mode, BlindSight&apos;s server is not an enclave.</strong> The path to the model
+            is attested, encrypted and signed, but the server decrypts published datasets in memory to build the
+            prompt.
+          </li>
+          <li>
+            <strong>In enclave mode</strong> you still trust Phala&apos;s OS image and key service, and the app
+            owner&apos;s control over upgrades. A new build has a new code hash, which the server refuses until it
+            is pinned and which anyone can see at <code>/api/enclave</code>.
           </li>
           <li>Testnet only, with no escrow contract. Transfers settle directly to recipients.</li>
           <li>
@@ -281,7 +369,14 @@ export default function DocsPage() {
             against one vault are rate-limited (20 per 10 minutes). This raises the cost of reconstructing a
             dataset but doesn&apos;t make it impossible.
           </li>
-          <li>Replay protection and anti-probing are kept in memory per server instance.</li>
+          <li>
+            The aggregate-only checks are heuristics. They stop bulk copying and obvious leaks, but a determined
+            buyer asking many narrow aggregate questions can still learn about individual records.
+          </li>
+          <li>
+            Replay protection and anti-probing are shared across server instances through Redis when it is
+            configured, and fall back to per-instance memory otherwise.
+          </li>
         </ul>
       </InfoSection>
 
@@ -292,6 +387,11 @@ export default function DocsPage() {
         <p>
           You hit the anti-probing limit for that vault. Wait about 10 minutes, and ask broader questions
           rather than many narrow variations of one.
+        </p>
+        <h3>&ldquo;BlindSight only answers with aggregate insights&rdquo; or &ldquo;the answer was withheld&rdquo;</h3>
+        <p>
+          The question asked for raw records, or the answer repeated too much of the data. You weren&apos;t charged
+          for it. Rephrase as a total, average, trend or comparison and choose <strong>Ask edited question</strong>.
         </p>
         <h3>The answer is taking a long time</h3>
         <p>
