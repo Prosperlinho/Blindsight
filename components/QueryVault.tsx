@@ -13,6 +13,7 @@ import {
 import { Buffer } from "buffer";
 import { Search, Trash2, X } from "lucide-react";
 import { WalletContext } from "@/components/WalletProvider";
+import AnswerReceipt, { parseAnswerReceipt, type AnswerReceiptData } from "@/components/AnswerReceipt";
 import PrivacyReceipt, {
   parseDatasetEnclave,
   parsePrivacyReceipt,
@@ -136,6 +137,7 @@ type VaultAnswer = {
   insight: string;
   privacy?: PrivacyReceiptData | null;
   datasetEnclave?: DatasetEnclaveData | null;
+  receipt?: AnswerReceiptData | null;
 };
 
 const PANEL = "rounded-2xl border border-white/10 bg-slate-900/70 backdrop-blur-xl";
@@ -409,12 +411,13 @@ export default function QueryVault({
     const receiptId = typeof record.receiptId === "string" ? record.receiptId : undefined;
     const privacy = parsePrivacyReceipt(record.privacy);
     const datasetEnclave = parseDatasetEnclave(record.enclave);
+    const receipt = parseAnswerReceipt(record.answerReceipt);
 
     if (!insight || (receiptId && receiptId !== execution.txHash)) {
       throw new QueryError(ANSWER_RETRY_MESSAGE, true);
     }
 
-    setAnswer({ vaultTitle: vault.title, insight, privacy, datasetEnclave });
+    setAnswer({ vaultTitle: vault.title, insight, privacy, datasetEnclave, receipt });
     setStage("ready");
     setRetryContext(null);
   }
@@ -963,6 +966,7 @@ export default function QueryVault({
                       <div className="mt-5 max-w-prose space-y-4 break-words text-[15px] leading-7 text-slate-100 sm:text-base">
                         {renderInsight(answer.insight)}
                       </div>
+                      {stage === "ready" && answer.receipt && <AnswerReceipt receipt={answer.receipt} />}
                       {stage === "ready" && answer.privacy && <PrivacyReceipt receipt={answer.privacy} datasetEnclave={answer.datasetEnclave} />}
                     </article>
                   )}

@@ -47,6 +47,7 @@ Hackathon write-up (Track 3, Privacy & Private AI): [HACKATHON.md](HACKATHON.md)
 | Encrypted question | The prompt is sent with Oblivious HTTP (RFC 9458), encrypted to a key signed by the attested gateway, so it is unreadable outside the enclave. There is no plain-HTTPS fallback: if the enclave can't be verified or OHTTP fails, the prompt is not sent and the payment stays retryable. |
 | Signed answer | The enclave's ed25519 signature over the exact request and response bytes is verified against the attested key. |
 | Privacy receipt | Each answer shows **Verified private answer** with expandable details. |
+| Answer provenance receipt | Each successful answer includes a copyable receipt linking the model response fingerprints, vault snapshot, dataset record/field counts, and verified NEAR payment. The receipt is an integrity record, not a proof that an interpretation is correct. |
 | Publishing | Upload CSV, TXT or Markdown files (up to 500 KB combined) and pay a one-time 0.05 NEAR fee. The dataset is encrypted with AES-256-GCM into a private Supabase bucket; only metadata is listed. |
 | Unpublishing | Only the publisher can remove a vault, proven with a fresh NEP-413 wallet signature that is verified on chain. |
 | Sample datasets | Three synthetic datasets in server-only code. The browser only sends a `vaultId`. |
@@ -88,6 +89,13 @@ The server does not trust the client. For each transfer it checks:
 
 If inference fails after the payment is verified, the same payment can be retried without paying
 again.
+
+Successful answers include an expandable **Evidence & answer receipt**. It shows the vault
+snapshot, the dataset coverage used for the answer, model and timestamp, the NEAR payment link,
+and fingerprints for the model input, model response, answer text, and receipt. Copy the receipt
+JSON to keep a local record. The raw dataset and question are not included; fingerprints are
+integrity checks, not anonymity guarantees, and the receipt does not independently prove that the
+interpretation is correct.
 
 ### Timing
 
