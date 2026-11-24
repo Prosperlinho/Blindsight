@@ -41,9 +41,9 @@ type QueryVaultProps = {
 export type VaultTab = "gateway" | "publish" | "explorer";
 
 export const VAULT_TABS: { id: VaultTab; label: string }[] = [
-  { id: "gateway", label: "Ask" },
-  { id: "explorer", label: "Browse" },
-  { id: "publish", label: "Publish" },
+  { id: "gateway", label: "Query" },
+  { id: "explorer", label: "Explore" },
+  { id: "publish", label: "Deploy" },
 ];
 
 type QueryStage = "idle" | "paying" | "answering" | "ready" | "error";
@@ -922,7 +922,7 @@ export default function QueryVault({
                       ? "Continue in wallet…"
                       : stage === "answering"
                         ? "Getting your answer…"
-                        : `Pay ${selectedQueryTotal} NEAR & Ask`}
+                        : `Pay ${selectedQueryTotal} NEAR · Run query`}
                   </button>
                 </div>
               </form>
@@ -977,7 +977,7 @@ export default function QueryVault({
             <div className={`${PANEL} px-4 py-10 text-center`}>
               <p className="text-sm text-slate-300">No vaults are available right now.</p>
               <button type="button" onClick={() => onTabChange("publish")} className={`${SECONDARY_BUTTON} mt-4`}>
-                Publish a vault
+                Deploy a vault
               </button>
             </div>
           )}
@@ -992,7 +992,7 @@ export default function QueryVault({
           className="animate-fade-up space-y-4"
         >
           <div>
-            <h2 className="text-lg font-semibold text-white">Browse vaults</h2>
+            <h2 className="text-lg font-semibold text-white">Explore vaults</h2>
             <p className="mt-1 text-sm text-slate-400">Choose a vault to ask it a question.</p>
           </div>
 
@@ -1074,7 +1074,7 @@ export default function QueryVault({
           className="animate-fade-up space-y-4"
         >
           <div>
-            <h2 className="text-lg font-semibold text-white">Publish a vault</h2>
+            <h2 className="text-lg font-semibold text-white">Deploy a vault</h2>
             <p className="mt-1 text-sm text-slate-400">
               Add a dataset and set a price per question. Buyers get answers, never your files.
             </p>
@@ -1216,10 +1216,10 @@ export default function QueryVault({
 
             <button type="submit" disabled={!canPublish || isPublishing} className={`${PRIMARY_BUTTON} w-full`}>
               {isPublishing
-                ? "Publishing…"
+                ? "Deploying…"
                 : isFeeEnabled(PUBLISH_FEE_NEAR) && !hasPaidPublishFee
-                  ? `Pay ${PUBLISH_FEE_NEAR} NEAR & Publish`
-                  : "Publish"}
+                  ? `Pay ${PUBLISH_FEE_NEAR} NEAR · Deploy vault`
+                  : "Deploy vault"}
             </button>
           </form>
 

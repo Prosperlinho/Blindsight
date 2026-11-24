@@ -306,7 +306,7 @@ export default function LandingIntro(props: LandingIntroProps) {
               Your data. Your price. Your vault.
             </h2>
             <p className="mx-auto mt-4 max-w-lg text-sm leading-6 text-slate-400 sm:text-base">
-              Browse private vaults or publish your own in the BlindSight marketplace.
+              Explore private vaults or deploy your own in the BlindSight marketplace.
             </p>
             <OpenMarketplaceButton {...buttonProps} className="mt-8" />
             <p className="mt-3 text-xs text-slate-500">{ctaHint}</p>

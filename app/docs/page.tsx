@@ -76,7 +76,7 @@ export default function DocsPage() {
       <InfoSection id="asking" title="Asking a question">
         <ol>
           <li>
-            Find a vault in the <strong>Browse</strong> tab, or pick one directly in the <strong>Ask</strong> tab.
+            Find a vault in the <strong>Explore</strong> tab, or pick one directly in the <strong>Query</strong> tab.
             Each vault shows its price per question.
           </li>
           <li>
@@ -226,7 +226,7 @@ export default function DocsPage() {
 
       <InfoSection id="publishing" title="Publishing a vault">
         <ol>
-          <li>Open the <strong>Publish</strong> tab in the marketplace.</li>
+          <li>Open the <strong>Deploy</strong> tab in the marketplace.</li>
           <li>
             Add a title (up to 80 characters), an optional description (up to 220) and one or more{" "}
             <code>.csv</code>, <code>.txt</code> or <code>.md</code> files. The combined dataset can be up to
