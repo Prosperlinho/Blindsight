@@ -1,4 +1,5 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
+import { recordActivity } from "@/lib/activityLog";
 import {
   createPublishedVault,
   deletePublishedVault,
@@ -47,6 +48,12 @@ export async function DELETE(request: Request) {
 
     await verifyUnpublishProof(proof);
     await deletePublishedVault(record);
+    after(() => recordActivity({
+      kind: "unpublish",
+      accountId: record.publisherAddress,
+      vaultId: record.id,
+      vaultTitle: record.title,
+    }));
     return NextResponse.json({ vaultId: record.id }, { headers: PRIVATE_HEADERS });
   } catch (error) {
     if (error instanceof VaultOwnershipError) {
@@ -150,6 +157,7 @@ export async function POST(request: Request) {
   // platform treasury, verified on-chain before anything is stored.
   const publishFeeNear = getPublishFeeNear();
   let publishFeeTxHash: string | null = null;
+  let paidPublishFeeNear: string | null = null;
   if (isFeeEnabled(publishFeeNear)) {
     const rawFeeTx = body.publishFeeTxHash;
     if (typeof rawFeeTx !== "string" || !rawFeeTx.trim()) {
@@ -166,6 +174,7 @@ export async function POST(request: Request) {
         minimumYocto: feeToYocto(publishFeeNear),
       });
       publishFeeTxHash = fee.txHash;
+      paidPublishFeeNear = fee.amountNear;
       console.info("[Published Vaults] Publishing fee verified.", { stage: "publish-fee" });
     } catch (error) {
       if (error instanceof PaymentVerificationError) {
@@ -189,6 +198,15 @@ export async function POST(request: Request) {
       ...(sealed ? { sealed } : { dataset: dataset as string }),
       publishFeeTxHash,
     });
+    after(() => recordActivity({
+      kind: "publish",
+      accountId: publisherAddress as string,
+      vaultId: vault.id,
+      vaultTitle: vault.title,
+      receiverId: publishFeeTxHash ? getPlatformTreasury() : null,
+      feeNear: paidPublishFeeNear,
+      feeTx: publishFeeTxHash,
+    }));
     return NextResponse.json({ vault }, { status: 201, headers: PRIVATE_HEADERS });
   } catch (error) {
     if (error instanceof PublishFeeAlreadyUsedError) {

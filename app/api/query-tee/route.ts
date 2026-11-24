@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import {
   cachePreparedDataset,
   deleteCachedPreparedDataset,
@@ -22,6 +22,7 @@ import {
   type VerifiedNearPayment,
 } from "@/lib/paymentVerification";
 import { checkQuestion, guardMessage, type GuardReason } from "@/lib/answerGuard";
+import { recordActivity } from "@/lib/activityLog";
 import {
   bindPaymentToQuestion,
   claimPayments,
@@ -375,6 +376,55 @@ type RouteAnswer =
   | { kind: "refused"; reason: GuardReason }
   | { kind: "dataset-rejected" };
 
+type AnswerReceipt = {
+  version: 1;
+  receiptHash: string;
+  issuedAt: string;
+  vaultId: string | null;
+  rowCount: number | null;
+  fieldCount: number | null;
+  model: string;
+  inputFingerprint: string;
+  responseFingerprint: string;
+  answerFingerprint: string;
+  paymentTxHash: string;
+  platformFeeTxHash: string | null;
+};
+
+function createAnswerReceipt({
+  insight,
+  receiptId,
+  vaultId,
+  rowCount,
+  fieldCount,
+  privacy,
+  platformFeeTxHash,
+}: {
+  insight: string;
+  receiptId: string;
+  vaultId: string | null;
+  rowCount: number | null;
+  fieldCount: number | null;
+  privacy: PrivacyReceipt;
+  platformFeeTxHash: string | null;
+}): AnswerReceipt {
+  const contents = {
+    version: 1 as const,
+    issuedAt: new Date().toISOString(),
+    vaultId,
+    rowCount,
+    fieldCount,
+    model: privacy.model,
+    inputFingerprint: privacy.requestHash,
+    responseFingerprint: privacy.responseHash,
+    answerFingerprint: createHash("sha256").update(insight).digest("hex"),
+    paymentTxHash: receiptId,
+    platformFeeTxHash,
+  };
+  const receiptHash = createHash("sha256").update(JSON.stringify(contents)).digest("hex");
+  return { ...contents, receiptHash };
+}
+
 function validateQuestion(question: string) {
   if (!question) {
     return NextResponse.json(
@@ -451,12 +501,14 @@ function successResponse({
   payment,
   privacy = null,
   enclave = null,
+  answerReceipt,
 }: {
   insight: string;
   receiptId: string;
   payment: Record<string, unknown>;
   privacy?: PrivacyReceipt | null;
   enclave?: EnclaveSummary | null;
+  answerReceipt: AnswerReceipt;
 }) {
   // Privacy guardrail: only the generated insight and payment settlement
   // metadata leave the server. Dataset text, raw file buffers, file names,
@@ -487,6 +539,7 @@ function successResponse({
     // Enclave mode: proof the dataset was opened only inside the attested
     // BlindSight enclave (null in direct mode).
     enclave,
+    answerReceipt,
   });
 }
 
@@ -602,6 +655,7 @@ export async function POST(req: NextRequest) {
     const queryHash = submittedQuery ? normalizeQueryHash(submittedQuery) : "";
     let payment: QueryPayment;
     let receiptId = "";
+    let platformFeeTxHash: string | null = null;
 
     failureStage = "payment-verification";
     if (!txHash) {
@@ -642,6 +696,7 @@ export async function POST(req: NextRequest) {
     const queryFeeNear = getQueryFeeNear();
     const feeRequired = isFeeEnabled(queryFeeNear);
     const feeTxHash = feeRequired && typeof rawFeeTxHash === "string" ? rawFeeTxHash.trim() : "";
+    platformFeeTxHash = feeTxHash || null;
     if (feeRequired && !feeTxHash) {
       return errorResponse(402, "The platform fee payment is missing. Please try again.", {
         code: "MISSING_FEE_TX",
@@ -655,13 +710,15 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // Fee actually transferred, for the admin log. A cached payment keeps the configured fee.
+    let paidFeeNear: string | null = feeRequired ? queryFeeNear : null;
     const cachedPayment = getCachedVerifiedPayment(txHash, payer, minimumYocto, receiver, feeTxHash || null);
     if (cachedPayment) {
       payment = cachedPayment.payment;
     } else {
       const verificationStartedAt = Date.now();
       try {
-        const [verifiedPayment] = await Promise.all([
+        const [verifiedPayment, verifiedFee] = await Promise.all([
           verifyNearTransfer({
             txHash,
             payerAccountId: payer,
@@ -687,6 +744,7 @@ export async function POST(req: NextRequest) {
             : Promise.resolve(null),
         ]);
         payment = verifiedPayment;
+        if (verifiedFee) paidFeeNear = verifiedFee.amountNear;
       } catch (verificationError) {
         if (verificationError instanceof PaymentVerificationError) {
           logQueryFailure("near-payment-verification", verificationError);
@@ -751,6 +809,8 @@ export async function POST(req: NextRequest) {
       return errorResponse(500, "The sample vault dataset is unavailable on this server.");
     }
     const vaultKey = resolvedVault?.id ?? resolvedPublishedVault?.id ?? null;
+    let evidenceRowCount = resolvedPublishedVault?.rowCount ?? resolvedVault?.rows ?? null;
+    let evidenceFieldCount = resolvedVault?.sampleColumns?.length ?? null;
 
     let datasetFingerprint: string;
     let runAnswer: () => Promise<RouteAnswer>;
@@ -817,6 +877,8 @@ export async function POST(req: NextRequest) {
         }
         if (typeof datasetId === "string") cachePreparedDataset(prepared, datasetId);
       }
+      evidenceRowCount = prepared.rowCount;
+      evidenceFieldCount = prepared.columns.length;
 
       failureStage = "inference-configuration";
       const apiKey = process.env.NEAR_AI_API_KEY?.trim();
@@ -927,12 +989,33 @@ export async function POST(req: NextRequest) {
         await releasePaymentClaim(paymentHashes);
         return storeUnavailableResponse(payment);
       }
+      const activity = {
+        kind: "query" as const,
+        accountId: payment.payerAccountId,
+        vaultId: vaultKey,
+        vaultTitle: resolvedVault?.title ?? resolvedPublishedVault?.title ?? null,
+        receiverId: receiver,
+        amountNear: payment.amountNear,
+        paymentTx: payment.txHash,
+        feeNear: platformFeeTxHash ? paidFeeNear : null,
+        feeTx: platformFeeTxHash,
+      };
+      after(() => recordActivity(activity));
       return successResponse({
         insight: outcome.insight,
         receiptId,
         payment,
         privacy: outcome.privacy,
         enclave: outcome.enclave,
+        answerReceipt: createAnswerReceipt({
+          insight: outcome.insight,
+          receiptId,
+          vaultId: vaultKey,
+          rowCount: evidenceRowCount,
+          fieldCount: evidenceFieldCount,
+          privacy: outcome.privacy,
+          platformFeeTxHash,
+        }),
       });
     } catch (err) {
       // The payment was valid but no answer was produced, so release the claim

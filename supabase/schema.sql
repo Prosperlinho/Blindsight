@@ -57,5 +57,39 @@ drop policy if exists "BlindSight encrypted datasets can be deleted" on storage.
 create policy "BlindSight encrypted datasets can be deleted"
   on storage.objects for delete to anon using (bucket_id = 'vault-datasets');
 
+-- Admin activity log: one row per answered paid question, publish and
+-- unpublish. Append-only (no update or delete grant), so it keeps the history
+-- of vaults that were later removed. Read only through the password-protected
+-- /api/admin/activity route.
+create table if not exists public.activity_log (
+  id bigint generated always as identity primary key,
+  kind text not null check (kind in ('query', 'publish', 'unpublish')),
+  account_id text not null,
+  vault_id text,
+  vault_title text,
+  receiver_id text,
+  amount_near text,
+  payment_tx text,
+  fee_near text,
+  fee_tx text,
+  created_at timestamptz not null default now()
+);
+
+-- A payment buys one answer and a publishing fee one vault, so each is logged once.
+create unique index if not exists activity_log_payment_tx_key on public.activity_log (payment_tx);
+create unique index if not exists activity_log_fee_tx_key on public.activity_log (fee_tx);
+create index if not exists activity_log_created_at_idx on public.activity_log (created_at desc);
+
+alter table public.activity_log enable row level security;
+grant select, insert on public.activity_log to anon;
+
+drop policy if exists "BlindSight activity is readable by the server" on public.activity_log;
+create policy "BlindSight activity is readable by the server"
+  on public.activity_log for select to anon using (true);
+
+drop policy if exists "BlindSight activity can be recorded" on public.activity_log;
+create policy "BlindSight activity can be recorded"
+  on public.activity_log for insert to anon with check (true);
+
 -- Make PostgREST pick up new columns immediately.
 notify pgrst, 'reload schema';
