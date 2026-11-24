@@ -274,7 +274,7 @@ export default function DocsPage() {
             <tr>
               <td>Question</td>
               <td>Set by the publisher</td>
-              <td>The publisher&apos;s payout account (the treasury for sample vaults)</td>
+              <td>The publisher&apos;s payout account. Sample vaults pay their own payout account, or the BlindSight treasury</td>
             </tr>
             <tr>
               <td>Platform fee, per question</td>
@@ -288,7 +288,7 @@ export default function DocsPage() {
             </tr>
           </tbody>
         </table>
-        <p>Sample vaults cost 0.1, 0.15 and 0.2 NEAR per question. Network gas is extra and very small.</p>
+        <p>The ten sample vaults cost between 0.1 and 0.2 NEAR per question. Network gas is extra and very small.</p>
       </InfoSection>
 
       <InfoSection id="agents" title="API for agents">

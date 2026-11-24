@@ -50,7 +50,8 @@ Hackathon write-up (Track 3, Privacy & Private AI): [HACKATHON.md](HACKATHON.md)
 | Answer provenance receipt | Each successful answer includes a copyable receipt linking the model response fingerprints, vault snapshot, dataset record/field counts, and verified NEAR payment. The receipt is an integrity record, not a proof that an interpretation is correct. |
 | Publishing | Upload CSV, TXT or Markdown files (up to 500 KB combined) and pay a one-time 0.05 NEAR fee. The dataset is encrypted with AES-256-GCM into a private Supabase bucket; only metadata is listed. |
 | Unpublishing | Only the publisher can remove a vault, proven with a fresh NEP-413 wallet signature that is verified on chain. |
-| Sample datasets | Three synthetic datasets in server-only code. The browser only sends a `vaultId`. |
+| Sample datasets | Ten synthetic datasets in server-only code (finance, health, smart-contract audit, DeFi lending, validators, retail, SaaS, logistics, security incidents, EV charging). The browser only sends a `vaultId`. Each sample's price goes to its payout account in `SAMPLE_PAYOUTS` (`lib/demoVaults.ts`), or to the treasury. |
+| Admin dashboard | `/admin`, protected by `ADMIN_PASSWORD`. Lists every upload, removal and paid question from an append-only Supabase activity record written after on-chain verification, with totals per vault and publisher. |
 | Aggregate-only answers | Questions asking for raw records are refused before inference, the model is instructed to answer with aggregates, and answers that reproduce records, quote long passages, come back as tables or contain personal identifiers are withheld. A refused or withheld answer doesn't use up the payment. |
 | Anti-probing | Query history and pattern checks per account and per IP. Only keyed hashes of each question and its words are kept, never the question text. Shared across instances through Upstash Redis when configured. |
 | Replay protection | Used payments are claimed atomically in Upstash Redis (in-memory fallback without it), and each payment is tied to one question. Publishing fees are single-use, enforced by a unique database column. |
@@ -114,9 +115,10 @@ only the checks that passed.
    marketplace.
 2. Click **Connect Wallet** and choose a NEAR testnet wallet. Fund it from the
    [faucet](https://near-faucet.io/) if needed.
-3. Pick a sample vault:
+3. In the **Query** tab, pick one of the ten sample vaults (0.1–0.2 NEAR), for example:
    - **Medical Research Cohort 2026**, 0.1 NEAR
    - **Q3 Financial & Market Demand**, 0.15 NEAR
+   - **DeFi Lending Pool Risk Monitor**, 0.15 NEAR
    - **Solidity Security Audit Report**, 0.2 NEAR
 
    Each question also adds the 0.01 NEAR platform fee, shown in the price breakdown.
@@ -169,10 +171,11 @@ Open [http://localhost:3000](http://localhost:3000).
 | `ENCLAVE_API_TOKEN` | Enclave mode | Shared secret for calls to the enclave (32+ characters). |
 | `ENCLAVE_COMPOSE_HASH` | Enclave mode | Pinned code hash of the enclave build. The server refuses any other build. |
 | `ENCLAVE_APP_ID` | Optional | Also pin the Phala app ID. |
+| `ADMIN_PASSWORD` | For `/admin` | Password for the admin dashboard, 12+ characters. Unset turns the dashboard off. |
 
 To enable publishing, run [`supabase/schema.sql`](supabase/schema.sql) in the Supabase SQL Editor.
-It creates the `vaults` table, the private `vault-datasets` bucket and their policies. It is safe
-to re-run after upgrades. Generate the encryption key with:
+It creates the `vaults` table, the private `vault-datasets` bucket, the append-only
+`activity_log` table used by `/admin`, and their policies. It is safe to re-run after upgrades. Generate the encryption key with:
 
 ```bash
 node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
@@ -199,6 +202,7 @@ app/
   marketplace/page.tsx       Marketplace shell, wallet state, activity
   docs/page.tsx              User and API documentation (/docs)
   privacy/page.tsx           Privacy policy (/privacy)
+  admin/page.tsx             Admin dashboard (/admin, password-protected)
   api/
     query-tee/route.ts       Verify payments, load dataset, private inference
     vaults/route.ts          List, publish (fee-verified) and unpublish (signature-verified)
@@ -206,8 +210,9 @@ app/
     enclave/validate/route.ts  Check a sealed dataset inside the enclave before paying
     vault/parse/route.ts     Text and PDF extraction
     verify-payment/route.ts  Standalone transfer check (optional for agents)
+    admin/activity/route.ts  Activity record and vaults for /admin (ADMIN_PASSWORD)
 components/
-  QueryVault.tsx             Vault explorer, query console, publishing
+  QueryVault.tsx             Query, Explore and Deploy tabs
   PrivacyReceipt.tsx         "Verified private answer" receipt
   LandingIntro.tsx           Landing content
   InfoPage.tsx, SiteFooter.tsx   Docs/privacy page shell and shared footer
@@ -224,6 +229,7 @@ lib/
   platformFees.ts            Query and publishing fees
   near-transfers.ts          Wallet signing, batched transfers
   publishedVaults.ts         Supabase metadata and encrypted storage
+  activityLog.ts             Append-only activity record of payments and uploads
   vaultOwnership.ts, verifyVaultOwner.ts   NEP-413 unpublish proofs
   demoVaults.ts, demoVaultDatasets.ts      Sample vaults (datasets server-only)
   datasetQuality.ts          Dataset preparation and cache

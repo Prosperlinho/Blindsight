@@ -6,7 +6,7 @@ export const metadata: Metadata = {
   description: "What data BlindSight handles, where it goes and how long it is kept.",
 };
 
-const LAST_UPDATED = "November 17, 2026";
+const LAST_UPDATED = "November 24, 2026";
 
 const SECTIONS = [
   { id: "summary", title: "Summary" },
@@ -52,6 +52,10 @@ export default function PrivacyPage() {
             encrypted in your browser and can only be opened inside BlindSight&apos;s attested enclave; otherwise
             BlindSight&apos;s server can decrypt them to answer questions.
           </li>
+          <li>
+            BlindSight keeps an activity record of paid questions, uploads and removals: account IDs, vault,
+            amounts and transaction hashes. It never includes question text, answers or dataset contents.
+          </li>
           <li>We don&apos;t sell or share your data for marketing.</li>
         </ul>
       </InfoSection>
@@ -72,6 +76,14 @@ export default function PrivacyPage() {
           question it paid for. These are held in server memory or in BlindSight&apos;s Redis database (Upstash),
           so every server instance sees them. Publishing-fee transaction hashes are stored with the vault listing
           for as long as the vault exists.
+        </p>
+        <p>
+          After a payment is verified and the answer released, or a vault is published or unpublished, BlindSight
+          adds an entry to an <strong>activity record</strong> in its Supabase database. Each entry holds the
+          account that paid or published, the vault&apos;s ID and title, the receiving account, the amounts, the
+          transaction hashes and the time. The same details are already public on chain; the record links each
+          payment to the vault it was for. It is used for platform accounting and abuse review, is visible only to
+          BlindSight&apos;s administrator, and is not shown to other users.
         </p>
       </InfoSection>
 
@@ -109,7 +121,8 @@ export default function PrivacyPage() {
         </ol>
         <p>
           Questions and answers are not written to a database or to logs, and the question text isn&apos;t kept
-          after your request finishes. The answer is returned to your browser and not kept on the server.
+          after your request finishes. The answer is returned to your browser and not kept on the server. The
+          activity record notes only that a paid question was answered for a vault, not what was asked.
         </p>
         <p>
           The publisher of a vault does not see your questions. They can see the payments to their account on
@@ -198,7 +211,7 @@ export default function PrivacyPage() {
             </tr>
             <tr>
               <td>Supabase</td>
-              <td>Vault listings and encrypted dataset files.</td>
+              <td>Vault listings, encrypted dataset files and the activity record.</td>
             </tr>
             <tr>
               <td>Phala Cloud (enclave mode)</td>
@@ -261,6 +274,10 @@ export default function PrivacyPage() {
               <td>Until you unpublish the vault</td>
             </tr>
             <tr>
+              <td>Activity record (account IDs, vault, amounts, transaction hashes)</td>
+              <td>Kept for platform accounting, including after a vault is unpublished. Entries can be deleted on request</td>
+            </tr>
+            <tr>
               <td>Blockchain transactions</td>
               <td>Permanently, on the public NEAR testnet</td>
             </tr>
@@ -276,11 +293,13 @@ export default function PrivacyPage() {
         <ul>
           <li>You can use the landing page and these docs without connecting a wallet.</li>
           <li>
-            You can unpublish your vaults at any time. Unpublishing deletes the listing and the encrypted file.
+            You can unpublish your vaults at any time. Unpublishing deletes the listing and the encrypted file. The
+            activity record keeps the vault&apos;s ID, title and its publish and unpublish entries.
           </li>
           <li>
-            Because BlindSight has no accounts and stores no profile, there is nothing else tied to you to export
-            or delete, beyond what is listed above. On-chain transactions can&apos;t be deleted by anyone.
+            BlindSight has no accounts and stores no profile. To get a copy of the activity-record entries for
+            your account, or to have them deleted, contact us below. On-chain transactions can&apos;t be deleted
+            by anyone.
           </li>
         </ul>
         <p>BlindSight is not directed at children under 13.</p>
