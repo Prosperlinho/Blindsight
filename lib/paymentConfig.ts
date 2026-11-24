@@ -17,7 +17,7 @@ export const NEAR_TESTNET_EXPLORER_TX_URL = "https://testnet.nearblocks.io/txns/
  * Fallback treasury account. It exists on NEAR testnet and is funded, so a
  * fresh clone works without any environment configuration.
  */
-export const DEFAULT_TREASURY_ACCOUNT = "blindsight-ceeaa6612a.testnet";
+export const DEFAULT_TREASURY_ACCOUNT = "blindsight.testnet";
 
 function isValidTreasuryAccountId(accountId: string): boolean {
   return accountId.length >= 2

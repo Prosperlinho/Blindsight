@@ -27,7 +27,7 @@ type ViewAccountRpcResponse = {
  * Validates a NEAR account ID using the protocol's account-ID rules:
  * 2–64 characters, lowercase alphanumerics and `._-`, and no leading,
  * trailing, or consecutive separators. This accepts named testnet accounts
- * (`blindsight-ceeaa6612a.testnet`) and 64-character implicit accounts.
+ * (`blindsight.testnet`) and 64-character implicit accounts.
  */
 export function isValidNearAccountId(accountId: string): boolean {
   if (typeof accountId !== "string") return false;

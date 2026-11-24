@@ -156,7 +156,7 @@ Open [http://localhost:3000](http://localhost:3000).
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `NEAR_AI_API_KEY` | **Yes** | Server-side key for NEAR AI Cloud. |
-| `NEXT_PUBLIC_BLINDSIGHT_TREASURY_ACCOUNT` | Optional | Treasury for sample-vault payments. Defaults to `blindsight-ceeaa6612a.testnet`. |
+| `NEXT_PUBLIC_BLINDSIGHT_TREASURY_ACCOUNT` | Optional | Treasury for sample-vault payments. Defaults to `blindsight.testnet`. |
 | `BLINDSIGHT_TREASURY_ACCOUNT` | Optional | Server-side override for the same treasury. |
 | `NEXT_PUBLIC_BLINDSIGHT_PLATFORM_TREASURY` | Optional | Receives platform fees. Defaults to the treasury. |
 | `NEXT_PUBLIC_BLINDSIGHT_QUERY_FEE_NEAR` | Optional | Per-question fee. Default `0.01`; `0` disables it. |
